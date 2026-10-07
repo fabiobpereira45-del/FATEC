@@ -1,0 +1,9 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(git rm -r tmp)",
+      "Bash(git push origin main)",
+      "Bash(git push -q origin main)"
+    ]
+  }
+}

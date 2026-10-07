@@ -1,6 +1,6 @@
 -- ====================================================================
 -- Script completo: Criação e Permissões da tabela professor_disciplines
--- Projeto Supabase do IETEO (plwqgvfbkjdnlzgljnef)
+-- Projeto Supabase de origem (não utilizado na FATEC)
 -- ====================================================================
 
 -- 1. Criar a tabela se ainda não existir
