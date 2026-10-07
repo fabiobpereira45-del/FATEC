@@ -1,0 +1,439 @@
+"use client"
+
+import { useState, useEffect, useCallback } from "react"
+import { AssessmentHeader } from "@/components/assessment-header"
+import { StudentLogin } from "@/components/student-login"
+import { AssessmentForm } from "@/components/assessment-form"
+import { AssessmentResult } from "@/components/assessment-result"
+import { ProfessorLogin } from "@/components/professor-login"
+import { AdminDashboard } from "@/components/admin-dashboard"
+import { StudentDashboard } from "@/components/student-dashboard"
+import { EnrollmentForm } from "@/components/enrollment-form"
+import { GradeViewer } from "@/components/grade-viewer"
+import { InstitutionalManager } from "@/components/institutional-manager"
+import { PoloSelector } from "@/components/polo-selector"
+import { HighlightsCarousel, type HighlightSlide } from "@/components/landing/highlights-carousel"
+import { CurriculumHighlight } from "@/components/landing/curriculum-highlight"
+import { ProfessorsShowcase } from "@/components/landing/professors-showcase"
+import { TestimonialsSection } from "@/components/landing/testimonials-section"
+import { ScrollReveal } from "@/components/landing/scroll-reveal"
+import { usePolo } from "@/lib/polo-context"
+import {
+  getStudentSession,
+  getSubmissionByEmailAndAssessment,
+  getProfessorSession,
+  getFinancialSettings,
+  type StudentSession,
+  type StudentSubmission,
+  type FinancialSettings,
+  getAvailableSlots,
+} from "@/lib/store"
+import { BookOpen, GraduationCap, ClipboardList, User, Users, MessageSquareQuote } from "lucide-react"
+
+type View = "polo-select" | "landing" | "public-exam-login" | "student-portal-login" | "student-assessment" | "student-result" | "professor-login" | "admin" | "student-dashboard"
+
+export default function HomePage() {
+  const { polo, selectPolo, resetPolo, isLoaded } = usePolo()
+  const [view, setView] = useState<View>("polo-select")
+  const [session, setSession] = useState<StudentSession | null>(null)
+  const [submission, setSubmission] = useState<StudentSubmission | null>(null)
+  const [finSettings, setFinSettings] = useState<FinancialSettings | null>(null)
+  const [mounted, setMounted] = useState(false)
+  const [showEnroll, setShowEnroll] = useState(false)
+  const [showGrade, setShowGrade] = useState(false)
+  const [availableSlots, setAvailableSlots] = useState<number | null>(null)
+
+  useEffect(() => {
+    setMounted(true)
+
+    // Restore professor session
+    const profSession = getProfessorSession()
+    if (profSession) {
+      setView("admin")
+      return
+    }
+
+    // Restore student session
+    async function checkStudentSession() {
+      const studentSession = getStudentSession()
+      // Only auto-restore assessment session if it actually has an assessmentId
+      if (studentSession && studentSession.assessmentId && studentSession.assessmentId !== "portal") {
+        const existing = await getSubmissionByEmailAndAssessment(studentSession.email, studentSession.assessmentId)
+        if (existing) {
+          setSession(studentSession)
+          setSubmission(existing)
+          // NO AUTO-REDIRECT: Let the user choose to resume from the landing page
+        } else {
+          setSession(studentSession)
+          // NO AUTO-REDIRECT: Let the user choose to resume from the landing page
+        }
+      }
+    }
+
+    async function fetchSlots() {
+      const slots = await getAvailableSlots()
+      setAvailableSlots(slots)
+    }
+
+    checkStudentSession()
+    fetchSlots()
+    getFinancialSettings().then(setFinSettings)
+  }, [])
+
+  // Once polo context is loaded for the FIRST time, auto-skip selector if polo was already saved.
+  // We do NOT re-run this when view changes (user explicitly navigating to polo-select must be allowed).
+  useEffect(() => {
+    if (!isLoaded) return
+    // Only auto-advance on initial load (when still on polo-select and no explicit user action)
+    setView(prev => (prev === "polo-select" && polo) ? "landing" : prev)
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [isLoaded])
+
+  // Hash routing for admin panel: /admin
+  useEffect(() => {
+    const { hash } = window.location
+    if (hash === "#admin" || hash === "#/admin") {
+      setView("professor-login")
+    }
+  }, [])
+
+  const handleStudentLogin = useCallback(async (sess: StudentSession) => {
+    setSession(sess)
+    const existing = await getSubmissionByEmailAndAssessment(sess.email, sess.assessmentId)
+    if (existing && existing.submittedAt) {
+      setSubmission(existing)
+      setView("student-result")
+    } else {
+      setView("student-assessment")
+    }
+  }, [])
+
+  const handleResult = useCallback((sub: StudentSubmission) => {
+    setSubmission(sub)
+    setView("student-result")
+  }, [])
+
+  const handleSubmit = useCallback((sub: StudentSubmission) => {
+    setSubmission(sub)
+    setView("student-result")
+  }, [])
+
+  const handleProfessorLogin = useCallback(() => {
+    setView("admin")
+  }, [])
+
+  const handleLogout = useCallback(() => {
+    setView(polo ? "landing" : "polo-select")
+    setSession(null)
+    setSubmission(null)
+    // IMPORTANT: Clear storage to prevent auto-redirect on next visit
+    import("@/lib/store").then(m => m.clearStudentSession())
+  }, [polo])
+
+  if (!mounted) return null
+
+  // ─── Polo selector (first screen) ─────────────────────────────────────────
+  if (view === "polo-select" || !polo) {
+    return (
+      <PoloSelector
+        onSelect={(selectedPolo) => {
+          selectPolo(selectedPolo)
+          setView("landing")
+        }}
+      />
+    )
+  }
+
+  // Admin views
+  if (view === "professor-login") {
+    return (
+      <div className="min-h-screen bg-background flex items-center justify-center px-4 py-10">
+        <ProfessorLogin onLogin={handleProfessorLogin} onBack={() => setView("landing")} />
+      </div>
+    )
+  }
+
+  if (view === "admin") {
+    return <AdminDashboard onLogout={() => setView("landing")} />
+  }
+
+  return (
+    <div className="min-h-screen bg-background">
+      {!["student-dashboard", "student-portal-login", "student-assessment", "student-result"].includes(view) && (
+        <AssessmentHeader
+          studentName={session?.name}
+          studentEmail={session?.email}
+          onAdminClick={() => setView("professor-login")}
+          onStudentAreaClick={session ? () => setView("student-dashboard") : undefined}
+          onEnrollClick={() => setShowEnroll(true)}
+          polo={polo}
+          onPoloChange={() => { resetPolo(); setView("polo-select") }}
+        />
+      )}
+
+      <main className="mx-auto max-w-[1400px] px-4 py-8">
+        {/* Landing Page */}
+        {view === "landing" && (
+          <div className="space-y-8">
+            {/* Hero */}
+            <div className="bg-maroon-dark bg-gradient-to-br from-[#450a0a] to-[#991b1b] rounded-3xl p-8 md:p-12 text-white shadow-2xl border border-white/10 relative overflow-hidden flex flex-col md:flex-row items-center justify-between gap-10">
+              <div className="absolute top-0 left-0 w-96 h-96 bg-white/5 rounded-full -ml-48 -mt-48 blur-3xl" />
+
+              <div className="text-left relative z-10 flex-1 space-y-4">
+                <div className="inline-flex items-center gap-2 px-3 py-1 rounded-full bg-white/10 border border-white/10 text-[10px] uppercase tracking-widest font-bold text-accent mb-2">
+                  Curso de Teologia Bíblica
+                </div>
+                <h1 className="text-4xl md:text-5xl font-extrabold tracking-tight leading-tight">
+                  Instituto de Ensino <br /> Teológico <span className="text-accent">FATEC</span>
+                </h1>
+                <div className="h-1.5 w-20 bg-accent rounded-full opacity-60" />
+                <p className="text-white/80 text-lg font-serif italic max-w-lg">
+                  "Veritas • Sapientia • Fides"
+                </p>
+                <div className="pt-4 flex flex-col lg:flex-row gap-6 items-start lg:items-center">
+                  <div className="flex gap-4 items-center">
+                    <div className="flex flex-col">
+                      <span className="text-[10px] uppercase text-white/50 font-bold tracking-wider">Polo de Acesso</span>
+                      <span className="text-sm font-bold text-accent">{polo?.name || "FATEC Oficial"}</span>
+                    </div>
+                    <div className="w-px h-8 bg-white/20" />
+                    <div className="flex flex-col">
+                      <span className="text-[10px] uppercase text-white/50 font-bold tracking-wider">Fundação</span>
+                      <span className="text-sm font-bold">2026</span>
+                    </div>
+                  </div>
+
+                  {/* Promo Banner */}
+                  <div className="bg-black/30 border border-accent/40 rounded-2xl p-4 backdrop-blur-md shadow-[0_0_25px_rgba(180,83,9,0.25)] w-full sm:w-auto">
+                    <p className="text-[10px] font-black uppercase tracking-[2px] text-accent mb-2 flex items-center gap-1.5">
+                       <span className="inline-block w-2 h-2 rounded-full bg-red-500 animate-ping"></span> 
+                       Corra! Vagas Limitadas
+                    </p>
+                    <div className="flex flex-col gap-1.5 text-xs">
+                      <div className="flex flex-wrap items-center justify-between gap-2">
+                        <span className="text-slate-200 font-medium">🏫 Presencial:</span>
+                        <span className="text-white font-bold bg-white/10 px-2 py-0.5 rounded-lg border border-white/10">
+                          Matrícula: R$ {(finSettings?.enrollmentFee ?? 60).toFixed(2)} • Mensal: R$ {(finSettings?.monthlyFee ?? 60).toFixed(2)}
+                        </span>
+                      </div>
+                      <div className="flex flex-wrap items-center justify-between gap-2">
+                        <span className="text-amber-300 font-medium">🌐 Online (EAD):</span>
+                        <span className="text-amber-950 font-bold bg-accent px-2 py-0.5 rounded-lg">
+                          Matrícula: R$ {(finSettings?.enrollmentFeeOnline ?? finSettings?.enrollmentFee ?? 60).toFixed(2)} • Mensal: R$ {(finSettings?.monthlyFeeOnline ?? finSettings?.monthlyFee ?? 60).toFixed(2)}
+                        </span>
+                      </div>
+                    </div>
+                    <p className="text-[9px] font-black text-accent mt-2 tracking-widest uppercase">
+                      • {availableSlots !== null ? `${availableSlots} Vagas Restantes` : "Matrículas Abertas"} •
+                    </p>
+                  </div>
+                </div>
+              </div>
+
+              <div className="relative z-10 flex-shrink-0 group">
+                <div className="absolute inset-0 bg-accent/20 rounded-full blur-3xl opacity-0 group-hover:opacity-100 transition-opacity duration-700" />
+                <div className="relative z-10 w-64 h-64 md:w-80 md:h-80 rounded-full shadow-[0_20px_50px_rgba(0,0,0,0.5)] transition-transform duration-500 hover:scale-105 overflow-hidden">
+                  <img
+                    src="/FATEC.png"
+                    alt="FATEC Logo"
+                    className="w-full h-full object-cover"
+                  />
+                </div>
+              </div>
+            </div>
+
+            {/* Highlights Carousel */}
+            <ScrollReveal>
+              <HighlightsCarousel
+                slides={[
+                  {
+                    id: "matricula",
+                    eyebrow: "Matrículas Abertas",
+                    title: "Comece sua formação teológica agora",
+                    description: `${availableSlots !== null ? `${availableSlots} vagas restantes` : "Vagas limitadas"} para presencial e EAD. Garanta a sua.`,
+                    cta: "Fazer Matrícula",
+                    icon: ClipboardList,
+                    gradient: "bg-gradient-to-br from-[#450a0a] to-[#991b1b]",
+                    onClick: () => setShowEnroll(true),
+                  },
+                  {
+                    id: "grade",
+                    eyebrow: "Grade Curricular",
+                    title: "18 disciplinas, 3 semestres, formação completa",
+                    description: "Veja todas as matérias, cronograma e modalidades disponíveis antes de se matricular.",
+                    cta: "Ver Grade Curricular",
+                    icon: BookOpen,
+                    gradient: "bg-gradient-to-br from-[#1a0606] to-[#450a0a]",
+                    onClick: () => setShowGrade(true),
+                  },
+                  {
+                    id: "professores",
+                    eyebrow: "Corpo Docente",
+                    title: "Aprenda com quem vive a Palavra",
+                    description: "Conheça os professores que vão te acompanhar em cada etapa do curso.",
+                    cta: "Conhecer Professores",
+                    icon: Users,
+                    gradient: "bg-gradient-to-br from-[#7f1d1d] to-[#450a0a]",
+                    onClick: () => document.getElementById("professores")?.scrollIntoView({ behavior: "smooth" }),
+                  },
+                  {
+                    id: "depoimentos",
+                    eyebrow: "Depoimentos",
+                    title: "Veja o que nossos alunos dizem",
+                    description: "Histórias reais de quem está transformando conhecimento em ministério.",
+                    cta: "Ver Depoimentos",
+                    icon: MessageSquareQuote,
+                    gradient: "bg-gradient-to-br from-[#2d0606] to-[#7f1d1d]",
+                    onClick: () => document.getElementById("depoimentos")?.scrollIntoView({ behavior: "smooth" }),
+                  },
+                ]}
+              />
+            </ScrollReveal>
+
+            {/* Action Cards */}
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+              {/* Apresentação do Curso / Landing Page */}
+              <a
+                href="/curso"
+                className="group relative overflow-hidden bg-gradient-to-r from-[#450a0a] via-[#1e1b2e] to-[#0f172a] text-white border-2 border-amber-500/50 rounded-2xl p-6 text-left shadow-lg hover:shadow-xl hover:border-amber-400 hover:scale-[1.01] transition-all sm:col-span-2 flex items-center justify-between"
+              >
+                <div>
+                  <div className="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full bg-amber-500/20 text-amber-300 text-xs font-bold uppercase tracking-wider mb-2 border border-amber-500/30">
+                    ✦ Matrículas Abertas • R$ 79,99/mês
+                  </div>
+                  <h2 className="text-xl sm:text-2xl font-black mb-1 text-white">Apresentação do Curso de Teologia</h2>
+                  <p className="text-sm text-slate-300">Veja a grade completa com os 3 semestres, corpo docente e garanta sua vaga.</p>
+                </div>
+                <div className="h-12 w-12 rounded-xl bg-amber-500/20 border border-amber-500/40 flex items-center justify-center text-amber-400 shrink-0 ml-4 group-hover:scale-110 transition-transform">
+                  <BookOpen className="h-6 w-6" />
+                </div>
+              </a>
+
+              {/* Matrícula */}
+              <button
+                onClick={() => setShowEnroll(true)}
+                className="group relative overflow-hidden bg-accent text-accent-foreground rounded-2xl p-6 text-left shadow-lg hover:shadow-xl hover:scale-[1.02] transition-all"
+              >
+                <div className="absolute inset-0 bg-white/10 opacity-0 group-hover:opacity-100 transition-opacity" />
+                <ClipboardList className="h-8 w-8 mb-3 opacity-90" />
+                <h2 className="text-xl font-extrabold mb-1">Fazer Matrícula</h2>
+                <p className="text-sm opacity-80">Inscreva-se agora e comece sua formação teológica</p>
+              </button>
+
+              {/* Grade */}
+              <button
+                onClick={() => setShowGrade(true)}
+                className="group relative overflow-hidden bg-card border-2 border-border rounded-2xl p-6 text-left shadow-lg hover:shadow-xl hover:border-accent/40 hover:scale-[1.02] transition-all"
+              >
+                <div className="absolute inset-0 bg-accent/5 opacity-0 group-hover:opacity-100 transition-opacity" />
+                <BookOpen className="h-8 w-8 text-accent mb-3" />
+                <h2 className="text-xl font-extrabold mb-1 text-foreground">Ver Grade Curricular</h2>
+                <p className="text-sm text-muted-foreground">Conheça as disciplinas, turmas e turnos disponíveis</p>
+              </button>
+
+              {/* Área do Aluno */}
+              <button
+                onClick={() => setView("student-portal-login")}
+                className="group relative overflow-hidden bg-card border-2 border-border rounded-2xl p-6 text-left shadow-lg hover:shadow-xl hover:border-accent/40 hover:scale-[1.02] transition-all"
+              >
+                <div className="absolute inset-0 bg-accent/5 opacity-0 group-hover:opacity-100 transition-opacity" />
+                <User className="h-8 w-8 text-accent mb-3" />
+                <h2 className="text-xl font-extrabold mb-1 text-foreground">Área do Aluno</h2>
+                <p className="text-sm text-muted-foreground">Acesso restrito para alunos matriculados.</p>
+              </button>
+
+              {/* Prova Pública */}
+              <button
+                onClick={() => setView("public-exam-login")}
+                className="group relative overflow-hidden bg-card border-2 border-border rounded-2xl p-6 text-left shadow-lg hover:shadow-xl hover:border-accent/40 hover:scale-[1.02] transition-all"
+              >
+                <div className="absolute inset-0 bg-accent/5 opacity-0 group-hover:opacity-100 transition-opacity" />
+                <GraduationCap className="h-8 w-8 text-accent mb-3" />
+                <h2 className="text-xl font-extrabold mb-1 text-foreground">Prova Pública</h2>
+                <p className="text-sm text-muted-foreground">Acesso aberto para avaliações públicas sem matrícula.</p>
+              </button>
+
+              {/* RETOMAR AVALIAÇÃO (Sessão Ativa) */}
+              {session && session.assessmentId && session.assessmentId !== "portal" && (
+                <button
+                  onClick={() => setView(submission?.submittedAt ? "student-result" : "student-assessment")}
+                  className="group relative overflow-hidden bg-primary text-primary-foreground rounded-2xl p-6 text-left shadow-lg hover:shadow-xl hover:scale-[1.02] transition-all border-2 border-accent animate-pulse col-span-1 sm:col-span-2"
+                >
+                  <div className="absolute inset-0 bg-white/10 opacity-0 group-hover:opacity-100 transition-opacity" />
+                  <div className="flex items-center justify-between">
+                    <div>
+                      <h2 className="text-xl font-extrabold mb-1">Retomar Avaliação</h2>
+                      <p className="text-sm opacity-90">Você tem uma sessão ativa: <strong>{session.name}</strong></p>
+                    </div>
+                    <BookOpen className="h-10 w-10 opacity-50" />
+                  </div>
+                </button>
+              )}
+            </div>
+
+            {/* Grade Curricular em Destaque */}
+            <ScrollReveal>
+              <CurriculumHighlight onViewGrade={() => setShowGrade(true)} />
+            </ScrollReveal>
+
+            {/* Professores */}
+            <div id="professores" className="scroll-mt-24">
+              <ProfessorsShowcase />
+            </div>
+
+            {/* Depoimentos */}
+            <div id="depoimentos" className="scroll-mt-24">
+              <TestimonialsSection />
+            </div>
+
+            {/* Inclusão Institucional */}
+            <div className="pt-8 border-t border-border mt-12">
+              <div className="mb-8">
+                <h2 className="text-3xl font-black text-foreground tracking-tight">Informações Institucionais</h2>
+                <p className="text-muted-foreground">Conheça nossa missão e diretoria</p>
+              </div>
+              <InstitutionalManager />
+            </div>
+          </div>
+        )}
+
+        {view === "public-exam-login" && <StudentLogin onLogin={handleStudentLogin} onResult={handleResult} onBack={() => setView("landing")} />}
+        {view === "student-portal-login" && (
+          <StudentDashboard session={null} onBack={() => setView("landing")} onLogout={handleLogout} />
+        )}
+        {view === "student-assessment" && session && (
+          <AssessmentForm session={session} onSubmit={handleSubmit} />
+        )}
+        {view === "student-result" && submission && (
+          <AssessmentResult submission={submission} onBack={handleLogout} />
+        )}
+        {view === "student-dashboard" && (
+          <StudentDashboard
+            session={session}
+            onBack={() => {
+              if (submission && submission.submittedAt) {
+                setView("student-result")
+              } else if (session) {
+                setView("student-assessment")
+              } else {
+                setView("landing")
+              }
+            }}
+            onLogout={handleLogout}
+          />
+        )}
+      </main>
+
+      {/* Modals */}
+      {showEnroll && (
+        <EnrollmentForm
+          onClose={() => setShowEnroll(false)}
+          onSuccess={() => setView("student-portal-login")}
+        />
+      )}
+      {showGrade && (
+        <GradeViewer onClose={() => setShowGrade(false)} />
+      )}
+    </div>
+  )
+}

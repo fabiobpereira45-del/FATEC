@@ -1,0 +1,462 @@
+"use client"
+
+import { useState, useEffect, useCallback } from "react"
+import { Plus, Trash2, Pencil, Save, X, Users, Clock, GraduationCap, Loader2, Calendar, Link, Check, Copy, BookOpen } from "lucide-react"
+import { getClasses, addClass, updateClass, deleteClass, getStudents, POLOS, backfillClassCurriculumFromGlobalGrade, type ClassRoom, type StudentProfile } from "@/lib/store"
+import { ClassCurriculumManager } from "@/components/class-curriculum-manager"
+import jsPDF from "jspdf"
+import autoTable from "jspdf-autotable"
+
+const SHIFTS = [
+    { value: "morning", label: "Manhã" },
+    { value: "afternoon", label: "Tarde" },
+    { value: "evening", label: "Noite" },
+]
+
+const MODALITIES = [
+    { value: "presencial", label: "Presencial" },
+    { value: "semi_presencial", label: "Semi Presencial (3 remotas, 1 presencial)" },
+    { value: "online", label: "100% Online" },
+]
+
+const DAYS = [
+    { value: "", label: "Não definido" },
+    { value: "monday", label: "Segunda-feira" },
+    { value: "tuesday", label: "Terça-feira" },
+    { value: "wednesday", label: "Quarta-feira" },
+    { value: "thursday", label: "Quinta-feira" },
+    { value: "friday", label: "Sexta-feira" },
+    { value: "saturday", label: "Sábado" },
+]
+
+const DAY_LABEL: Record<string, string> = {
+    monday: "Segunda-feira",
+    tuesday: "Terça-feira",
+    wednesday: "Quarta-feira",
+    thursday: "Quinta-feira",
+    friday: "Sexta-feira",
+    saturday: "Sábado",
+}
+
+const SHIFT_LABEL: Record<string, string> = {
+    morning: "Manhã",
+    afternoon: "Tarde",
+    evening: "Noite",
+    ead: "EAD/Online",
+}
+
+const DAY_ORDER: Record<string, number> = {
+    monday: 1,
+    tuesday: 2,
+    wednesday: 3,
+    thursday: 4,
+    friday: 5,
+    saturday: 6,
+    sunday: 7,
+}
+
+type FormState = {
+    name: string
+    shift: ClassRoom["shift"]
+    dayOfWeek: string
+    maxStudents: number
+    modality: ClassRoom["modality"]
+    poloId: string
+}
+
+const EMPTY_FORM: FormState = {
+    name: "",
+    shift: "evening",
+    dayOfWeek: "",
+    maxStudents: 30,
+    modality: "presencial",
+    poloId: "polo-tancredo-neves"
+}
+
+interface ClassFormProps {
+    val: FormState
+    onChange: (field: keyof FormState, value: string | number) => void
+    poloFilter?: string
+}
+
+function ClassForm({ val, onChange, poloFilter }: ClassFormProps) {
+    const isPoloLocked = !!(poloFilter && poloFilter !== "all")
+    const currentPoloId = val.poloId || (isPoloLocked ? poloFilter! : "polo-tancredo-neves")
+
+    return (
+        <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+            <div className="sm:col-span-2">
+                <label className="text-xs font-semibold text-muted-foreground block mb-1">Nome da Turma *</label>
+                <input
+                    className="w-full border border-input rounded-lg px-3 py-2 text-sm bg-background focus:outline-none focus:ring-2 focus:ring-accent"
+                    placeholder="Ex: Turma A - 2026"
+                    value={val.name}
+                    onChange={e => onChange("name", e.target.value)}
+                />
+            </div>
+            <div>
+                <label className="text-xs font-semibold text-muted-foreground block mb-1">Polo *</label>
+                <select
+                    className="w-full border border-input rounded-lg px-3 py-2 text-sm bg-background focus:outline-none focus:ring-2 focus:ring-accent disabled:opacity-70 disabled:bg-muted"
+                    value={currentPoloId}
+                    onChange={e => onChange("poloId", e.target.value)}
+                    disabled={isPoloLocked}
+                >
+                    {POLOS.map(p => (
+                        <option key={p.id} value={p.id}>{p.name} ({p.city})</option>
+                    ))}
+                </select>
+            </div>
+            <div>
+                <label className="text-xs font-semibold text-muted-foreground block mb-1">Dia da Semana</label>
+                <select
+                    className="w-full border border-input rounded-lg px-3 py-2 text-sm bg-background focus:outline-none focus:ring-2 focus:ring-accent"
+                    value={val.dayOfWeek}
+                    onChange={e => onChange("dayOfWeek", e.target.value)}
+                >
+                    {DAYS.map(d => <option key={d.value} value={d.value}>{d.label}</option>)}
+                </select>
+            </div>
+            <div>
+                <label className="text-xs font-semibold text-muted-foreground block mb-1">Turno</label>
+                <select
+                    className="w-full border border-input rounded-lg px-3 py-2 text-sm bg-background focus:outline-none focus:ring-2 focus:ring-accent"
+                    value={val.shift}
+                    onChange={e => onChange("shift", e.target.value)}
+                >
+                    {SHIFTS.map(s => <option key={s.value} value={s.value}>{s.label}</option>)}
+                </select>
+            </div>
+            <div>
+                <label className="text-xs font-semibold text-muted-foreground block mb-1">Modalidade</label>
+                <select
+                    className="w-full border border-input rounded-lg px-3 py-2 text-sm bg-background focus:outline-none focus:ring-2 focus:ring-accent"
+                    value={val.modality}
+                    onChange={e => onChange("modality", e.target.value)}
+                >
+                    {MODALITIES.map(m => <option key={m.value} value={m.value}>{m.label}</option>)}
+                </select>
+            </div>
+            <div>
+                <label className="text-xs font-semibold text-muted-foreground block mb-1">Máx. de Alunos</label>
+                <input
+                    type="number" min={1} max={500}
+                    className="w-full border border-input rounded-lg px-3 py-2 text-sm bg-background focus:outline-none focus:ring-2 focus:ring-accent"
+                    value={val.maxStudents}
+                    onChange={e => onChange("maxStudents", Number(e.target.value))}
+                />
+            </div>
+        </div>
+    )
+}
+
+export function ClassManager({ poloFilter }: { poloFilter?: string }) {
+    const [classes, setClasses] = useState<ClassRoom[]>([])
+    const [students, setStudents] = useState<StudentProfile[]>([])
+    const [loading, setLoading] = useState(true)
+    const [saving, setSaving] = useState(false)
+    const [editingId, setEditingId] = useState<string | null>(null)
+    const [showNew, setShowNew] = useState(false)
+    const [curriculumClass, setCurriculumClass] = useState<ClassRoom | null>(null)
+    const [migrating, setMigrating] = useState(false)
+    const initialPolo = (poloFilter && poloFilter !== "all") ? poloFilter : "polo-tancredo-neves"
+    const [form, setForm] = useState<FormState>({ ...EMPTY_FORM, poloId: initialPolo })
+    const [editForm, setEditForm] = useState<FormState>({ ...EMPTY_FORM, poloId: initialPolo })
+
+    const load = useCallback(async () => {
+        setLoading(true)
+        const [cls, stds] = await Promise.all([getClasses(poloFilter), getStudents()])
+        const sortedCls = [...cls].sort((a, b) => {
+            const orderA = a.dayOfWeek ? (DAY_ORDER[a.dayOfWeek] || 99) : 100
+            const orderB = b.dayOfWeek ? (DAY_ORDER[b.dayOfWeek] || 99) : 100
+            if (orderA !== orderB) return orderA - orderB
+            return a.name.localeCompare(b.name)
+        })
+        setClasses(sortedCls)
+        setStudents(stds)
+        setLoading(false)
+    }, [poloFilter])
+
+    useEffect(() => {
+        load()
+        const defaultPolo = (poloFilter && poloFilter !== "all") ? poloFilter : "polo-tancredo-neves"
+        setForm(f => ({ ...f, poloId: defaultPolo }))
+    }, [load, poloFilter])
+
+    async function handleAdd() {
+        if (!form.name.trim()) return
+        setSaving(true)
+        try {
+            const targetPolo = form.poloId || (poloFilter && poloFilter !== "all" ? poloFilter : "polo-tancredo-neves")
+            await addClass({
+                name: form.name.trim(),
+                shift: form.shift,
+                dayOfWeek: form.dayOfWeek || undefined,
+                maxStudents: form.maxStudents,
+                modality: form.modality,
+                poloId: targetPolo
+            })
+            setForm({ ...EMPTY_FORM, poloId: targetPolo })
+            setShowNew(false)
+            await load()
+        } finally {
+            setSaving(false)
+        }
+    }
+
+    async function handleUpdate(id: string) {
+        setSaving(true)
+        try {
+            await updateClass(id, {
+                name: editForm.name.trim(),
+                shift: editForm.shift,
+                dayOfWeek: editForm.dayOfWeek || undefined,
+                maxStudents: editForm.maxStudents,
+                modality: editForm.modality,
+                poloId: editForm.poloId || undefined
+            })
+            setEditingId(null)
+            await load()
+        } finally {
+            setSaving(false)
+        }
+    }
+
+    async function handleDelete(id: string) {
+        if (!confirm("Excluir esta turma? Alunos vinculados perderão a associação.")) return
+        await deleteClass(id)
+        await load()
+    }
+
+    function startEdit(c: ClassRoom) {
+        setEditingId(c.id)
+        setEditForm({
+            name: c.name,
+            shift: c.shift,
+            dayOfWeek: c.dayOfWeek || "",
+            maxStudents: c.maxStudents,
+            modality: c.modality || "presencial",
+            poloId: c.poloId || (poloFilter && poloFilter !== "all" ? poloFilter : "polo-tancredo-neves")
+        })
+        setShowNew(false)
+    }
+
+    async function handleMigrateExistingClasses() {
+        if (!confirm("Isso cria a grade curricular própria de cada turma que ainda não tem uma, copiando a grade global atual (mesma sequência que já gera as mensalidades hoje). Turmas que já têm grade própria não são alteradas. Continuar?")) return
+        setMigrating(true)
+        try {
+            const results = await backfillClassCurriculumFromGlobalGrade()
+            const migrated = results.filter(r => r.inserted > 0)
+            alert(migrated.length > 0
+                ? `Grade criada para ${migrated.length} turma(s):\n${migrated.map(r => `${r.className}: ${r.inserted} disciplina(s)`).join("\n")}`
+                : "Todas as turmas já têm grade própria cadastrada.")
+        } catch (err: any) {
+            alert("Erro ao migrar turmas: " + err.message)
+        } finally {
+            setMigrating(false)
+        }
+    }
+
+    async function copyLink(classId: string) {
+        const url = `${window.location.origin}/registrar?classId=${classId}`
+        await navigator.clipboard.writeText(url)
+        alert("Link de matrícula copiado!")
+    }
+
+    const handleFormChange = (field: keyof FormState, value: string | number) =>
+        setForm(f => ({ ...f, [field]: value }))
+
+    const handleEditFormChange = (field: keyof FormState, value: string | number) =>
+        setEditForm(f => ({ ...f, [field]: value }))
+
+    function downloadClassPDF(c: ClassRoom, classStudents: StudentProfile[]) {
+        const doc = new jsPDF()
+        
+        // Title
+        doc.setFontSize(18)
+        doc.text(`Lista de Alunos - ${c.name}`, 14, 20)
+        
+        doc.setFontSize(10)
+        doc.setTextColor(100)
+        doc.text(`Turno: ${SHIFT_LABEL[c.shift] || c.shift} | Dia: ${c.dayOfWeek ? DAY_LABEL[c.dayOfWeek] : 'N/D'}`, 14, 28)
+        doc.text(`Data de Emissão: ${new Date().toLocaleDateString('pt-BR')}`, 14, 33)
+        
+        const tableData = classStudents.map((s, i) => [
+            i + 1,
+            s.name,
+            s.enrollment_number || "—",
+            s.phone || "—",
+            s.payment_status === "paid" ? "Pago" : "Pendente"
+        ])
+
+        autoTable(doc, {
+            startY: 40,
+            head: [['#', 'Nome do Aluno', 'Matrícula', 'Telefone', 'Status Fin.']],
+            body: tableData,
+            theme: 'striped',
+            headStyles: { fillColor: [31, 41, 55] },
+            styles: { fontSize: 9 }
+        })
+
+        doc.save(`Alunos_${c.name.replace(/\s+/g, '_')}.pdf`)
+    }
+
+    return (
+        <div className="space-y-6">
+            <div className="flex items-center justify-between">
+                <div>
+                    <h2 className="text-xl font-bold text-foreground flex items-center gap-2">
+                        <GraduationCap className="h-5 w-5 text-accent" /> Turmas
+                    </h2>
+                    <p className="text-sm text-muted-foreground">Gerencie turmas, dias e vagas disponíveis</p>
+                </div>
+                <div className="flex gap-2">
+                    <button
+                        onClick={handleMigrateExistingClasses}
+                        disabled={migrating}
+                        title="Cria a grade própria das turmas que ainda não têm, copiando a grade global atual"
+                        className="flex items-center gap-2 bg-primary/10 text-primary font-bold px-4 py-2 rounded-xl hover:bg-primary/20 transition-colors text-sm disabled:opacity-60"
+                    >
+                        {migrating ? <Loader2 className="h-4 w-4 animate-spin" /> : <BookOpen className="h-4 w-4" />} Migrar Grade das Turmas
+                    </button>
+                    <button
+                        onClick={() => { setShowNew(true); setEditingId(null) }}
+                        className="flex items-center gap-2 bg-accent text-accent-foreground font-bold px-4 py-2 rounded-xl hover:bg-accent/90 transition-colors text-sm"
+                    >
+                        <Plus className="h-4 w-4" /> Nova Turma
+                    </button>
+                </div>
+            </div>
+
+            {showNew && (
+                <div className="bg-accent/5 border-2 border-accent/20 rounded-2xl p-5 space-y-4">
+                    <h3 className="font-semibold text-sm flex items-center gap-2"><Plus className="h-4 w-4 text-accent" /> Nova Turma</h3>
+                    <ClassForm val={form} onChange={handleFormChange} poloFilter={poloFilter} />
+                    <div className="flex gap-3">
+                        <button onClick={handleAdd} disabled={saving || !form.name.trim()}
+                            className="flex items-center gap-2 bg-green-600 text-white font-bold px-4 py-2 rounded-xl hover:bg-green-700 disabled:opacity-60 transition-colors text-sm">
+                            {saving ? <Loader2 className="h-4 w-4 animate-spin" /> : <Save className="h-4 w-4" />} Salvar Turma
+                        </button>
+                        <button onClick={() => setShowNew(false)} className="flex items-center gap-2 border border-border px-4 py-2 rounded-xl text-sm hover:bg-muted transition-colors">
+                            <X className="h-4 w-4" /> Cancelar
+                        </button>
+                    </div>
+                </div>
+            )}
+
+            {loading ? (
+                <div className="flex justify-center py-12"><Loader2 className="h-6 w-6 text-accent animate-spin" /></div>
+            ) : classes.length === 0 ? (
+                <div className="bg-muted/30 border border-dashed border-border rounded-2xl p-12 text-center">
+                    <GraduationCap className="h-10 w-10 text-muted-foreground/40 mx-auto mb-3" />
+                    <p className="text-muted-foreground">Nenhuma turma cadastrada.</p>
+                </div>
+            ) : (
+                <div className="space-y-3">
+                    {classes.map(c => {
+                        const classPolo = POLOS.find(p => p.id === c.poloId)
+                        return (
+                        <div key={c.id} className="bg-card border border-border rounded-2xl p-4 shadow-sm">
+                            {editingId === c.id ? (
+                                <div className="space-y-4">
+                                    <ClassForm val={editForm} onChange={handleEditFormChange} poloFilter={poloFilter} />
+                                    <div className="flex gap-3">
+                                        <button onClick={() => handleUpdate(c.id)} disabled={saving}
+                                            className="flex items-center gap-2 bg-green-600 text-white font-bold px-4 py-2 rounded-xl hover:bg-green-700 disabled:opacity-60 transition-colors text-sm">
+                                            {saving ? <Loader2 className="h-4 w-4 animate-spin" /> : <Save className="h-4 w-4" />} Salvar
+                                        </button>
+                                        <button onClick={() => setEditingId(null)} className="flex items-center gap-2 border border-border px-4 py-2 rounded-xl text-sm hover:bg-muted transition-colors">
+                                            <X className="h-4 w-4" /> Cancelar
+                                        </button>
+                                    </div>
+                                </div>
+                            ) : (
+                                <div className="flex items-center justify-between gap-4">
+                                    <div className="flex-1 min-w-0">
+                                        <div className="flex items-center gap-2 flex-wrap">
+                                            <p className="font-semibold text-foreground truncate">{c.name}</p>
+                                            <span className={`inline-flex items-center text-[11px] font-semibold px-2 py-0.5 rounded-md border ${
+                                                c.poloId === 'polo-chapada'
+                                                    ? 'bg-amber-500/10 text-amber-700 dark:text-amber-400 border-amber-500/30'
+                                                    : 'bg-blue-500/10 text-blue-700 dark:text-blue-400 border-blue-500/30'
+                                            }`}>
+                                                {classPolo ? classPolo.name : (c.poloId === 'polo-chapada' ? 'Polo Chapada' : 'Polo Salvador')}
+                                            </span>
+                                        </div>
+                                        <div className="flex flex-wrap items-center gap-3 mt-1.5">
+                                            {c.dayOfWeek && (
+                                                <span className="flex items-center gap-1 text-xs text-muted-foreground">
+                                                    <Calendar className="h-3 w-3" />{DAY_LABEL[c.dayOfWeek] || c.dayOfWeek}
+                                                </span>
+                                            )}
+                                            <span className="flex items-center gap-1 text-xs text-muted-foreground">
+                                                <Clock className="h-3 w-3" />{SHIFT_LABEL[c.shift] || c.shift}
+                                            </span>
+                                            <span className="flex items-center gap-1.5 text-xs text-muted-foreground">
+                                                <span className="w-1.5 h-1.5 rounded-full bg-blue-500"></span>
+                                                {MODALITIES.find(m => m.value === c.modality)?.label || "Presencial"}
+                                            </span>
+                                            <span className="flex items-center gap-1 text-xs font-bold text-primary">
+                                                <Users className="h-3 w-3" />
+                                                {c.studentCount || 0} matriculados ({c.maxStudents - (c.studentCount || 0)} vagas)
+                                            </span>
+                                        </div>
+                                    </div>
+                                    <div className="flex gap-2 shrink-0">
+                                        <button 
+                                            onClick={() => downloadClassPDF(c, students.filter(s => s.class_id === c.id))}
+                                            className="p-2 rounded-lg border border-red-200 bg-red-50 hover:bg-red-100 transition-colors" 
+                                            title="Baixar Lista em PDF"
+                                        >
+                                            <svg className="h-4 w-4 text-red-600" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                                                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 10v6m0 0l-3-3m3 3l3-3m2 8H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
+                                            </svg>
+                                        </button>
+                                        <button onClick={() => copyLink(c.id)} className="p-2 rounded-lg border border-accent/30 bg-accent/5 hover:bg-accent/10 transition-colors" title="Copiar Link de Matrícula">
+                                            <Link className="h-4 w-4 text-accent" />
+                                        </button>
+                                        <button onClick={() => setCurriculumClass(c)} className="p-2 rounded-lg border border-primary/30 bg-primary/5 hover:bg-primary/10 transition-colors" title="Grade Curricular da Turma">
+                                            <BookOpen className="h-4 w-4 text-primary" />
+                                        </button>
+                                        <button onClick={() => startEdit(c)} className="p-2 rounded-lg border border-border hover:bg-muted transition-colors" title="Editar">
+                                            <Pencil className="h-4 w-4 text-muted-foreground" />
+                                        </button>
+                                        <button onClick={() => handleDelete(c.id)} className="p-2 rounded-lg border border-red-200 hover:bg-red-50 transition-colors" title="Excluir">
+                                            <Trash2 className="h-4 w-4 text-red-500" />
+                                        </button>
+                                    </div>
+                                </div>
+                            )}
+
+                            {/* Alunos Matriculados */}
+                            <div className="mt-4 pt-4 border-t border-border/50">
+                                <h4 className="text-xs font-bold text-muted-foreground uppercase tracking-wider mb-2 flex items-center gap-2">
+                                    <Users className="h-3.5 w-3.5" />
+                                    Alunos Matriculados ({students.filter(s => s.class_id === c.id).length})
+                                </h4>
+                                <div className="flex flex-col gap-1.5 max-h-[250px] overflow-y-auto pr-2 custom-scrollbar">
+                                    {students.filter(s => s.class_id === c.id).length === 0 ? (
+                                        <span className="text-xs text-muted-foreground italic px-1">Nenhum aluno matriculado ainda.</span>
+                                    ) : (
+                                        students.filter(s => s.class_id === c.id).map(student => (
+                                            <div key={student.id} className="flex justify-between items-center text-sm py-1.5 px-2 rounded-lg hover:bg-muted/50 transition-colors">
+                                                <span className="font-medium text-foreground">{student.name}</span>
+                                                <span className="text-xs text-muted-foreground font-mono bg-muted border border-border px-2 py-0.5 rounded-md">
+                                                    {student.enrollment_number || "Sem Registro"}
+                                                </span>
+                                            </div>
+                                        ))
+                                    )}
+                                </div>
+                            </div>
+                        </div>
+                    )})}
+                </div>
+            )}
+
+            {curriculumClass && (
+                <ClassCurriculumManager classRoom={curriculumClass} onClose={() => setCurriculumClass(null)} />
+            )}
+        </div>
+    )
+}

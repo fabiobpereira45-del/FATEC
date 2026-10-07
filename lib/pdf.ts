@@ -1,0 +1,2465 @@
+import { 
+  type Assessment, type Question, type StudentAnswer, type StudentSubmission, 
+  type Semester, type Discipline, type ProfessorAccount, type ProfessorDiscipline, 
+  type FinancialCharge, type StudentProfile, type StudentGrade, type Attendance, type GradeSettings,
+  calculateGlobalAverage
+} from "./store"
+
+export function openAndPrintHTML(html: string, width = 900, height = 700): void {
+  const win = window.open("", "_blank", `width=${width},height=${height}`)
+  if (!win) {
+    alert("Permita janelas pop-up no seu navegador para visualizar/imprimir o documento PDF.")
+    return
+  }
+  win.document.write(html)
+  win.document.close()
+  setTimeout(() => {
+    try {
+      win.focus()
+      win.print()
+    } catch (e) {
+      console.error("Erro ao disparar impressão:", e)
+    }
+  }, 300)
+}
+
+interface PDFData {
+  submission: StudentSubmission
+  assessment: Assessment
+  questions: Question[]
+}
+
+function formatTime(seconds: number): string {
+  const m = Math.floor(seconds / 60)
+  const s = seconds % 60
+  return `${m}min ${s}s`
+}
+
+function formatDate(iso: string): string {
+  return new Date(iso).toLocaleString("pt-BR", {
+    day: "2-digit",
+    month: "2-digit",
+    year: "numeric",
+    hour: "2-digit",
+    minute: "2-digit",
+  })
+}
+
+function getAnswerLabel(answer: string, question: Question): string {
+  if (question.type === "true-false") {
+    return answer === "true" ? "Verdadeiro" : answer === "false" ? "Falso" : "—"
+  }
+  if (question.type === "discursive") {
+    return answer || "—"
+  }
+  const choice = question.choices.find((c) => c.id === answer)
+  return choice ? choice.text : "—"
+}
+
+function getCorrectLabel(question: Question): string {
+  if (question.type === "true-false") {
+    const letter = question.correctAnswer === "true" ? "(a)" : "(b)"
+    const text = question.correctAnswer === "true" ? "Verdadeiro" : "Falso"
+    return `${letter} ${text}`
+  }
+  if (question.type === "discursive") {
+    return "Questão discursiva — correção manual"
+  }
+  
+  const choices = (question.choices || []).filter(c => c.text && c.text.trim() !== "")
+  const index = choices.findIndex((c) => c.id === question.correctAnswer)
+  if (index !== -1) {
+    const letter = String.fromCharCode(97 + index)
+    return `(${letter}) ${choices[index].text}`
+  }
+  
+  return "—"
+}
+
+function typeLabel(type: Question["type"]): string {
+  const labels: Record<string, string> = {
+    "multiple-choice": "Múltipla Escolha",
+    "true-false": "Verdadeiro ou Falso",
+    "incorrect-alternative": "Alternativa Incorreta",
+    "fill-in-the-blank": "Completar Lacunas",
+    "matching": "Relacionar Colunas",
+    "discursive": "Discursiva"
+  }
+  return labels[type] || "Questão"
+}
+
+export function printStudentPDF({ submission, assessment, questions }: PDFData): void {
+  const orderedQuestions = assessment.questionIds
+    .map((id) => questions.find((q) => q.id === id))
+    .filter(Boolean) as Question[]
+
+  const rows = orderedQuestions
+    .map((q, i) => {
+      const studentAns = submission.answers.find((a) => a.questionId === q.id)
+      const studentLabel = studentAns ? getAnswerLabel(studentAns.answer, q) : "—"
+      const correctLabel = getCorrectLabel(q)
+      const isDiscursive = q.type === "discursive"
+      const isCorrect = !isDiscursive && studentAns?.answer === q.correctAnswer
+      const statusColor = isDiscursive ? "#6b7280" : isCorrect ? "#16a34a" : "#dc2626"
+      const statusText = isDiscursive ? "Discursiva" : isCorrect ? "Correta" : "Incorreta"
+
+      const isChoiceType = q.type === "multiple-choice" || q.type === "incorrect-alternative"
+      const choicesHTML = isChoiceType
+          ? `<ul style="margin:4px 0 0 0;padding:0;list-style:none;">
+              ${(q.choices || []).filter(c => c.text && c.text.trim() !== "")
+            .map(
+              (c, idx) => {
+                const letter = String.fromCharCode(97 + idx)
+                return `<li style="margin:2px 0;padding:3px 6px;border-radius:4px;font-size:12px;
+                    background:${c.id === q.correctAnswer ? "#dcfce7" : c.id === studentAns?.answer && !isCorrect ? "#fee2e2" : "#f9fafb"};
+                    color:${c.id === q.correctAnswer ? "#166534" : c.id === studentAns?.answer && !isCorrect ? "#991b1b" : "#374151"}">
+                    <strong>(${letter})</strong> ${c.text}${c.id === q.correctAnswer ? " ✓" : ""}${c.id === studentAns?.answer && !isCorrect ? " ✗" : ""}
+                    </li>`
+              }
+            )
+            .join("")}
+             </ul>`
+          : ""
+
+      const discursiveHTML =
+        q.type === "discursive"
+          ? `<div style="margin-top:6px;padding:8px;background:#f9fafb;border:1px solid #e5e7eb;border-radius:4px;font-size:12px;color:#374151;min-height:40px;">
+              ${studentLabel}
+             </div>`
+          : ""
+
+      return `
+        <div style="margin-bottom:16px;padding:12px;border:1px solid #e5e7eb;border-radius:8px;break-inside:avoid;">
+          <div style="display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:6px;">
+            <span style="font-size:11px;font-weight:600;color:#6b7280;text-transform:uppercase;letter-spacing:.5px;">
+              Questão ${i + 1} &nbsp;·&nbsp; ${typeLabel(q.type)} &nbsp;·&nbsp; ${assessment.pointsPerQuestion} pt${assessment.pointsPerQuestion !== 1 ? "s" : ""}
+            </span>
+            <span style="font-size:11px;font-weight:700;color:${statusColor};text-transform:uppercase;">${statusText}</span>
+          </div>
+          <p style="margin:0 0 6px 0;font-size:13px;color:#111827;line-height:1.5;">${q.text}</p>
+          ${choicesHTML}
+          ${discursiveHTML}
+          ${q.type === "true-false"
+          ? `<div style="margin-top:6px;display:flex;gap:8px;">
+                  <span style="padding:3px 10px;border-radius:4px;font-size:12px;background:${studentAns?.answer === "true" && !isCorrect ? "#fee2e2" : studentAns?.answer === "true" ? "#dcfce7" : "#f3f4f6"};color:${studentAns?.answer === "true" && !isCorrect ? "#991b1b" : studentAns?.answer === "true" ? "#166534" : "#374151"}"><strong>(a)</strong> Verdadeiro${q.correctAnswer === "true" ? " ✓" : ""}${studentAns?.answer === "true" && !isCorrect ? " ✗" : ""}</span>
+                  <span style="padding:3px 10px;border-radius:4px;font-size:12px;background:${studentAns?.answer === "false" && !isCorrect ? "#fee2e2" : studentAns?.answer === "false" ? "#dcfce7" : "#f3f4f6"};color:${studentAns?.answer === "false" && !isCorrect ? "#991b1b" : studentAns?.answer === "false" ? "#166534" : "#374151"}"><strong>(b)</strong> Falso${q.correctAnswer === "false" ? " ✓" : ""}${studentAns?.answer === "false" && !isCorrect ? " ✗" : ""}</span>
+                 </div>`
+          : ""
+        }
+          ${!isDiscursive
+          ? `<div style="margin-top:8px;font-size:12px;color:#166534;font-weight:600;">
+                  Gabarito: ${correctLabel}
+                </div>`
+          : ""
+        }
+        </div>`
+    })
+    .join("")
+
+  const gabaritoRows = orderedQuestions
+    .filter((q) => q.type !== "discursive")
+    .map((q, i) => {
+      const num = orderedQuestions.findIndex((oq) => oq.id === q.id) + 1
+      return `<tr>
+        <td style="padding:5px 10px;border:1px solid #e5e7eb;text-align:center;font-weight:600;">${num}</td>
+        <td style="padding:5px 10px;border:1px solid #e5e7eb;font-size:12px;">${q.text.slice(0, 60)}${q.text.length > 60 ? "…" : ""}</td>
+        <td style="padding:5px 10px;border:1px solid #e5e7eb;font-size:12px;color:#166534;font-weight:600;">${getCorrectLabel(q)}</td>
+      </tr>`
+    })
+    .join("")
+
+  const html = `<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+  <meta charset="UTF-8"/>
+  <title>Prova — ${submission.studentName}</title>
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body { font-family: Arial, sans-serif; color: #111827; background: #fff; padding: 24px; }
+    @media print { body { padding: 0; } }
+  </style>
+</head>
+<body>
+  <!-- Header -->
+  <div style="border-bottom:3px solid #1e3a5f;padding-bottom:16px;margin-bottom:20px;">
+    <div style="display:flex;justify-content:space-between;align-items:flex-start;">
+      <div>
+        <div style="font-size:11px;font-weight:700;color:#f97316;text-transform:uppercase;letter-spacing:1px;">${assessment.institution}</div>
+        <h1 style="font-size:20px;font-weight:800;color:#1e3a5f;margin:4px 0;">${assessment.title}</h1>
+        <div style="font-size:12px;color:#6b7280;">Professor: ${assessment.professor}</div>
+      </div>
+      <div style="text-align:right;">
+        <div style="font-size:11px;color:#6b7280;">Data de entrega</div>
+        <div style="font-size:13px;font-weight:600;">${formatDate(submission.submittedAt)}</div>
+        <div style="font-size:11px;color:#6b7280;margin-top:4px;">Tempo: ${formatTime(submission.timeElapsedSeconds)}</div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Student info + Score -->
+  <div style="display:flex;gap:16px;margin-bottom:24px;">
+    <div style="flex:1;padding:12px;background:#f8fafc;border:1px solid #e2e8f0;border-radius:8px;">
+      <div style="font-size:11px;color:#6b7280;text-transform:uppercase;letter-spacing:.5px;margin-bottom:4px;">Aluno</div>
+      <div style="font-size:16px;font-weight:700;color:#1e3a5f;">${submission.studentName}</div>
+      <div style="font-size:12px;color:#6b7280;">${submission.studentEmail}</div>
+    </div>
+    <div style="padding:12px 24px;background:#1e3a5f;border-radius:8px;text-align:center;min-width:120px;">
+      <div style="font-size:11px;color:rgba(255,255,255,.7);text-transform:uppercase;letter-spacing:.5px;margin-bottom:4px;">Nota Final</div>
+      <div style="font-size:32px;font-weight:800;color:#fff;">${submission.score.toFixed(1)}</div>
+      <div style="font-size:12px;color:rgba(255,255,255,.7);">de ${submission.totalPoints.toFixed(1)} pts (${submission.percentage}%)</div>
+    </div>
+  </div>
+
+  <!-- Questions -->
+  <h2 style="font-size:14px;font-weight:700;color:#1e3a5f;text-transform:uppercase;letter-spacing:.5px;margin-bottom:12px;border-bottom:1px solid #e5e7eb;padding-bottom:8px;">Respostas do Aluno</h2>
+  ${rows}
+
+  <!-- Gabarito table -->
+  ${gabaritoRows
+      ? `<div style="margin-top:24px;page-break-before:always;">
+          <h2 style="font-size:14px;font-weight:700;color:#1e3a5f;text-transform:uppercase;letter-spacing:.5px;margin-bottom:12px;border-bottom:2px solid #1e3a5f;padding-bottom:8px;">Gabarito Oficial</h2>
+          <table style="width:100%;border-collapse:collapse;font-size:13px;">
+            <thead>
+              <tr style="background:#1e3a5f;color:#fff;">
+                <th style="padding:8px 10px;border:1px solid #1e3a5f;width:60px;">Nº</th>
+                <th style="padding:8px 10px;border:1px solid #1e3a5f;text-align:left;">Questão</th>
+                <th style="padding:8px 10px;border:1px solid #1e3a5f;text-align:left;">Resposta Correta</th>
+              </tr>
+            </thead>
+            <tbody>${gabaritoRows}</tbody>
+          </table>
+        </div>`
+      : ""
+    }
+
+  <div style="margin-top:32px;padding-top:12px;border-top:1px solid #e5e7eb;font-size:11px;color:#9ca3af;text-align:center;">
+    Documento gerado pelo Sistema de Avaliações FATEC — ${new Date().toLocaleDateString("pt-BR")}
+  </div>
+</body>
+</html>`
+
+  openAndPrintHTML(html, 900, 700)
+}
+
+export function printBlankAssessmentPDF({ assessment, questions }: Omit<PDFData, "submission">): void {
+  const versions = assessment.shuffleVariants ? [
+    { type: 'A', qs: [...assessment.questionIds] },
+    { type: 'B', qs: [...assessment.questionIds].sort(() => Math.random() - 0.5) },
+    { type: 'C', qs: [...assessment.questionIds].sort(() => Math.random() - 0.5) },
+  ] : [
+    { type: '', qs: [...assessment.questionIds] }
+  ]
+
+  const pagesHtml = versions.map((version, versionIdx) => {
+    const orderedQuestions = version.qs
+      .map((id) => questions.find((q) => q.id === id))
+      .filter(Boolean) as Question[]
+
+    const rows = orderedQuestions
+      .map((q, i) => {
+        const isChoiceType = q.type === "multiple-choice" || q.type === "incorrect-alternative" || q.type === "true-false"
+        const displayChoices = q.type === "true-false"
+          ? [{ id: "true", text: "Verdadeiro" }, { id: "false", text: "Falso" }]
+          : (q.choices || []).filter(c => c.text && c.text.trim() !== "")
+
+        const choicesHTML = isChoiceType
+          ? `<ul style="margin:8px 0 0 0;padding:0;list-style:none;">
+              ${displayChoices.map((c, idx) => {
+                const letter = String.fromCharCode(97 + idx)
+                return `<li style="margin:4px 0;padding:4px 6px;font-size:13px;color:#374151;display:flex;align-items:center;">
+                  <span style="display:inline-block;width:14px;height:14px;border:1px solid #9ca3af;border-radius:50%;margin-right:8px;flex-shrink:0;"></span>
+                  <span style="font-weight:bold;margin-right:6px;">(${letter})</span>
+                  ${c.text}
+                </li>`
+              }).join("")}
+             </ul>`
+          : ""
+
+        const discursiveSpaceHTML =
+          q.type === "discursive"
+            ? `<div style="margin-top:10px;height:100px;border-bottom:1px solid #d1d5db;background:repeating-linear-gradient(transparent,transparent 24px,#e5e7eb 24px,#e5e7eb 25px);"></div>`
+            : ""
+
+        return `
+          <div style="margin-bottom:24px;break-inside:avoid;">
+            <div style="font-size:14px;font-weight:600;color:#111827;line-height:1.5;margin-bottom:4px;">
+              ${i + 1}. ${q.text} <span style="font-weight:normal;color:#6b7280;font-size:11px;">(${assessment.pointsPerQuestion} pt${assessment.pointsPerQuestion !== 1 ? "s" : ""})</span>
+            </div>
+            ${choicesHTML}
+            ${discursiveSpaceHTML}
+          </div>`
+      })
+      .join("")
+
+    const header = `
+      <div style="border:1px solid #cbd5e1;border-radius:8px;padding:16px;margin-bottom:24px;">
+        <div style="display:flex;align-items:center;gap:16px;margin-bottom:12px;">
+          ${assessment.logoBase64
+        ? `<img src="${assessment.logoBase64}" style="max-width:80px;max-height:80px;object-fit:contain;" alt="Logo"/>`
+        : ""
+      }
+          <div style="flex:1;">
+            <div style="display:flex;justify-content:space-between;align-items:flex-start;">
+              <div>
+                <div style="font-size:12px;font-weight:700;color:#64748b;text-transform:uppercase;letter-spacing:1px;margin-bottom:4px;">${assessment.institution || 'Faculdade de Teologia e Cultura - FATEC'}</div>
+                <h1 style="font-size:22px;font-weight:800;color:#0f172a;margin:0 0 4px 0;">${assessment.title}</h1>
+                <div style="font-size:13px;color:#475569;">Professor(a): <span style="font-weight:600;">${assessment.professor}</span></div>
+              </div>
+              ${version.type ? `<div style="font-size:24px;font-weight:900;color:#1e3a5f;border:2px solid #1e3a5f;border-radius:8px;padding:4px 12px;">TIPO ${version.type}</div>` : ''}
+            </div>
+          </div>
+        </div>
+        
+        <div style="border-top:1px solid #e2e8f0;margin-top:12px;padding-top:12px;">
+          <div style="display:flex;gap:16px;margin-bottom:12px;">
+            <div style="flex:1;font-size:14px;color:#334155;">
+              Aluno(a): ______________________________________________________________
+            </div>
+            <div style="font-size:14px;color:#334155;white-space:nowrap;">
+              Data: ___/___/_______
+            </div>
+          </div>
+          <div style="display:flex;gap:16px;">
+            <div style="font-size:14px;color:#334155;white-space:nowrap;">
+              Turma: ___________________________________
+            </div>
+            <div style="font-size:14px;color:#334155;white-space:nowrap;">
+              Nota: __________
+            </div>
+          </div>
+        </div>
+
+        ${assessment.rules
+        ? `<div style="margin-top:16px;padding:10px;background:#f8fafc;border:1px solid #e2e8f0;border-radius:6px;font-size:12px;color:#475569;">
+                 <strong style="color:#0f172a;">Instruções:</strong> ${assessment.rules.replace(/\n/g, '<br/>')}
+               </div>`
+        : ""
+      }
+      </div>`
+
+    return `
+      <div style="${versionIdx > 0 ? 'page-break-before: always;' : ''}">
+        ${header}
+        <div style="margin-top:24px;">
+          ${rows}
+        </div>
+        <div style="margin-top:40px;padding-top:12px;border-top:1px solid #e5e7eb;font-size:10px;color:#9ca3af;text-align:center;">
+          Documento gerado pelo Sistema de Avaliações FATEC — Bom desempenho!
+        </div>
+      </div>
+    `
+  }).join("\n")
+
+  const html = `<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+  <meta charset="UTF-8"/>
+  <title>${assessment.title} - Em Branco</title>
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body { font-family: Arial, sans-serif; color: #111827; background: #fff; padding: 24px; max-width:800px; margin: 0 auto; }
+    @media print { body { padding: 0; margin: 0; } }
+  </style>
+</head>
+<body>
+  ${pagesHtml}
+</body>
+</html>`
+
+  openAndPrintHTML(html, 900, 700)
+}
+
+export function printCompiledSubmissionsPDF({ submissions, assessment, questions }: { submissions: StudentSubmission[], assessment: Assessment, questions: Question[] }): void {
+  const allSubmissionsHtml = submissions.map((submission, index) => {
+    const orderedQuestions = assessment.questionIds
+      .map((id) => questions.find((q) => q.id === id))
+      .filter(Boolean) as Question[]
+
+    const rows = orderedQuestions
+      .map((q, i) => {
+        const studentAns = submission.answers.find((a) => a.questionId === q.id)
+        const studentLabel = studentAns ? getAnswerLabel(studentAns.answer, q) : "—"
+        const correctLabel = getCorrectLabel(q)
+        const isDiscursive = q.type === "discursive"
+        const isCorrect = !isDiscursive && studentAns?.answer === q.correctAnswer
+        const statusColor = isDiscursive ? "#6b7280" : isCorrect ? "#16a34a" : "#dc2626"
+        const statusText = isDiscursive ? "Discursiva" : isCorrect ? "Correta" : "Incorreta"
+
+        const isChoiceType = q.type === "multiple-choice" || q.type === "incorrect-alternative"
+        const choicesHTML = isChoiceType
+            ? `<ul style="margin:4px 0 0 0;padding:0;list-style:none;">
+                ${(q.choices || []).filter(c => c.text && c.text.trim() !== "")
+              .map(
+                (c, idx) => {
+                  const letter = String.fromCharCode(97 + idx)
+                  return `<li style="margin:2px 0;padding:3px 6px;border-radius:4px;font-size:12px;
+                      background:${c.id === q.correctAnswer ? "#dcfce7" : c.id === studentAns?.answer && !isCorrect ? "#fee2e2" : "#f9fafb"};
+                      color:${c.id === q.correctAnswer ? "#166534" : c.id === studentAns?.answer && !isCorrect ? "#991b1b" : "#374151"}">
+                      <strong>(${letter})</strong> ${c.text}${c.id === q.correctAnswer ? " ✓" : ""}${c.id === studentAns?.answer && !isCorrect ? " ✗" : ""}
+                      </li>`
+                }
+              )
+              .join("")}
+               </ul>`
+            : ""
+
+        const discursiveHTML =
+          q.type === "discursive"
+            ? `<div style="margin-top:6px;padding:8px;background:#f9fafb;border:1px solid #e5e7eb;border-radius:4px;font-size:12px;color:#374151;min-height:40px;">
+                ${studentLabel}
+               </div>`
+            : ""
+
+        return `
+          <div style="margin-bottom:16px;padding:12px;border:1px solid #e5e7eb;border-radius:8px;break-inside:avoid;">
+            <div style="display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:6px;">
+              <span style="font-size:11px;font-weight:600;color:#6b7280;text-transform:uppercase;letter-spacing:.5px;">
+                Questão ${i + 1} &nbsp;·&nbsp; ${typeLabel(q.type)} &nbsp;·&nbsp; ${assessment.pointsPerQuestion} pt${assessment.pointsPerQuestion !== 1 ? "s" : ""}
+              </span>
+              <span style="font-size:11px;font-weight:700;color:${statusColor};text-transform:uppercase;">${statusText}</span>
+            </div>
+            <p style="margin:0 0 6px 0;font-size:13px;color:#111827;line-height:1.5;">${q.text}</p>
+            ${choicesHTML}
+            ${discursiveHTML}
+            ${q.type === "true-false"
+            ? `<div style="margin-top:6px;display:flex;gap:8px;">
+                    <span style="padding:3px 10px;border-radius:4px;font-size:12px;background:${studentAns?.answer === "true" && !isCorrect ? "#fee2e2" : studentAns?.answer === "true" ? "#dcfce7" : "#f3f4f6"};color:${studentAns?.answer === "true" && !isCorrect ? "#991b1b" : studentAns?.answer === "true" ? "#166534" : "#374151"}"><strong>(a)</strong> Verdadeiro${q.correctAnswer === "true" ? " ✓" : ""}${studentAns?.answer === "true" && !isCorrect ? " ✗" : ""}</span>
+                    <span style="padding:3px 10px;border-radius:4px;font-size:12px;background:${studentAns?.answer === "false" && !isCorrect ? "#fee2e2" : studentAns?.answer === "false" ? "#dcfce7" : "#f3f4f6"};color:${studentAns?.answer === "false" && !isCorrect ? "#991b1b" : studentAns?.answer === "false" ? "#166534" : "#374151"}"><strong>(b)</strong> Falso${q.correctAnswer === "false" ? " ✓" : ""}${studentAns?.answer === "false" && !isCorrect ? " ✗" : ""}</span>
+                   </div>`
+            : ""
+          }
+            ${!isDiscursive
+            ? `<div style="margin-top:8px;font-size:12px;color:#166534;font-weight:600;">
+                    Gabarito: ${correctLabel}
+                  </div>`
+            : ""
+          }
+          </div>`
+      })
+      .join("")
+
+    return `
+      <div style="${index > 0 ? 'page-break-before: always; margin-top: 40px;' : ''}">
+        <!-- Header -->
+        <div style="border-bottom:3px solid #1e3a5f;padding-bottom:16px;margin-bottom:20px;">
+          <div style="display:flex;justify-content:space-between;align-items:flex-start;">
+            <div>
+              <div style="font-size:11px;font-weight:700;color:#f97316;text-transform:uppercase;letter-spacing:1px;">${assessment.institution}</div>
+              <h1 style="font-size:20px;font-weight:800;color:#1e3a5f;margin:4px 0;">${assessment.title}</h1>
+              <div style="font-size:12px;color:#6b7280;">Professor: ${assessment.professor}</div>
+            </div>
+            <div style="text-align:right;">
+              <div style="font-size:11px;color:#6b7280;">Data de entrega</div>
+              <div style="font-size:13px;font-weight:600;">${formatDate(submission.submittedAt)}</div>
+              <div style="font-size:11px;color:#6b7280;margin-top:4px;">Tempo: ${formatTime(submission.timeElapsedSeconds)}</div>
+            </div>
+          </div>
+        </div>
+
+        <!-- Student info + Score -->
+        <div style="display:flex;gap:16px;margin-bottom:24px;">
+          <div style="flex:1;padding:12px;background:#f8fafc;border:1px solid #e2e8f0;border-radius:8px;">
+            <div style="font-size:11px;color:#6b7280;text-transform:uppercase;letter-spacing:.5px;margin-bottom:4px;">Aluno</div>
+            <div style="font-size:16px;font-weight:700;color:#1e3a5f;">${submission.studentName}</div>
+            <div style="font-size:12px;color:#6b7280;">${submission.studentEmail}</div>
+          </div>
+          <div style="padding:12px 24px;background:#1e3a5f;border-radius:8px;text-align:center;min-width:120px;">
+            <div style="font-size:11px;color:rgba(255,255,255,.7);text-transform:uppercase;letter-spacing:.5px;margin-bottom:4px;">Nota Final</div>
+            <div style="font-size:32px;font-weight:800;color:#fff;">${submission.score.toFixed(1)}</div>
+            <div style="font-size:12px;color:rgba(255,255,255,.7);">de ${submission.totalPoints.toFixed(1)} pts (${submission.percentage}%)</div>
+          </div>
+        </div>
+
+        <!-- Questions -->
+        <h2 style="font-size:14px;font-weight:700;color:#1e3a5f;text-transform:uppercase;letter-spacing:.5px;margin-bottom:12px;border-bottom:1px solid #e5e7eb;padding-bottom:8px;">Respostas do Aluno</h2>
+        ${rows}
+      </div>
+    `
+  }).join("")
+
+  const html = `<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+  <meta charset="UTF-8"/>
+  <title>Compilado de Provas — ${assessment.title}</title>
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body { font-family: Arial, sans-serif; color: #111827; background: #fff; padding: 24px; }
+    @media print { body { padding: 0; } }
+  </style>
+</head>
+<body>
+  ${allSubmissionsHtml}
+  <div style="margin-top:32px;padding-top:12px;border-top:1px solid #e5e7eb;font-size:11px;color:#9ca3af;text-align:center;">
+    Documento gerado pelo Sistema de Avaliações FATEC — ${new Date().toLocaleDateString("pt-BR")}
+  </div>
+</body>
+</html>`
+
+  openAndPrintHTML(html, 900, 700)
+}
+
+export function printOverviewPDF({ assessments, submissions, questions }: { assessments: Assessment[], submissions: StudentSubmission[], questions: Question[] }): void {
+  const totalStudents = submissions.length
+  const avgScore = totalStudents > 0
+    ? Math.round(submissions.reduce((acc, s) => acc + s.percentage, 0) / totalStudents)
+    : 0
+  const passing = submissions.filter((s) => s.percentage >= 70).length
+
+  const activeAssessment = assessments[0]
+  const activeSubs = activeAssessment ? submissions.filter(s => s.assessmentId === activeAssessment.id) : []
+  const activeQuestions = activeAssessment
+    ? activeAssessment.questionIds.map((id) => questions.find((q) => q.id === id)).filter(Boolean) as Question[]
+    : []
+
+  const questionStats = activeQuestions.map((q, i) => {
+    const total = activeSubs.length
+    const correct = activeSubs.filter((s) => s.answers.find((a) => a.questionId === q.id)?.answer === q.correctAnswer).length
+    const pct = total > 0 ? Math.round((correct / total) * 100) : 0
+    return {
+      number: i + 1,
+      text: q.text,
+      correct,
+      errors: total - correct,
+      total,
+      pct,
+    }
+  })
+
+  const statsHtml = questionStats.map((stat) => `
+    <div style="display:flex;align-items:center;gap:12px;margin-bottom:10px;break-inside:avoid;">
+      <span style="font-size:12px;font-weight:700;color:#6b7280;width:25px;text-align:right;">${stat.number}</span>
+      <div style="flex:1;height:12px;background:#f3f4f6;border-radius:6px;overflow:hidden;">
+        <div style="height:100%;width:${stat.pct}%;background:${stat.pct >= 70 ? "#16a34a" : stat.pct >= 50 ? "#d97706" : "#dc2626"};"></div>
+      </div>
+      <span style="font-size:12px;font-weight:700;width:40px;text-align:right;">${stat.pct}%</span>
+      <span style="font-size:12px;color:#4b5563;flex:2;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">${stat.text}</span>
+      <span style="font-size:11px;color:#9ca3af;width:80px;text-align:right;">${stat.correct}/${stat.total} acertos</span>
+    </div>
+  `).join("")
+
+  const html = `<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+  <meta charset="UTF-8"/>
+  <title>Relatório de Visão Geral — FATEC</title>
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body { font-family: Arial, sans-serif; color: #111827; background: #fff; padding: 40px; }
+    .card { background:#f9fafb; border:1px solid #e5e7eb; border-radius:12px; padding:20px; }
+    .stat-bar { height:12px; background:#e5e7eb; border-radius:6px; overflow:hidden; }
+  </style>
+</head>
+<body>
+  <div style="text-align:center;margin-bottom:40px;">
+    <div style="font-size:12px;font-weight:700;color:#f97316;text-transform:uppercase;letter-spacing:1px;margin-bottom:4px;">Faculdade de Teologia e Cultura - FATEC</div>
+    <h1 style="font-size:28px;font-weight:800;color:#1e3a5f;">Relatório Geral de Desempenho</h1>
+    <div style="font-size:14px;color:#6b7280;margin-top:8px;">Gerado em ${new Date().toLocaleDateString("pt-BR")} às ${new Date().toLocaleTimeString("pt-BR")}</div>
+  </div>
+
+  <div style="display:grid;grid-template-columns:repeat(4,1fr);gap:20px;margin-bottom:40px;">
+    <div class="card">
+      <div style="font-size:11px;color:#6b7280;text-transform:uppercase;font-weight:700;margin-bottom:8px;">Alunos Avaliados</div>
+      <div style="font-size:24px;font-weight:800;color:#1e3a5f;">${totalStudents}</div>
+    </div>
+    <div class="card">
+      <div style="font-size:11px;color:#6b7280;text-transform:uppercase;font-weight:700;margin-bottom:8px;">Média Geral</div>
+      <div style="font-size:24px;font-weight:800;color:${avgScore >= 70 ? "#16a34a" : "#d97706"};">${avgScore}%</div>
+    </div>
+    <div class="card">
+      <div style="font-size:11px;color:#6b7280;text-transform:uppercase;font-weight:700;margin-bottom:8px;">Aprovados (≥70%)</div>
+      <div style="font-size:24px;font-weight:800;color:#16a34a;">${passing}</div>
+    </div>
+    <div class="card">
+      <div style="font-size:11px;color:#6b7280;text-transform:uppercase;font-weight:700;margin-bottom:8px;">Provas Criadas</div>
+      <div style="font-size:24px;font-weight:800;color:#1e3a5f;">${assessments.length}</div>
+    </div>
+  </div>
+
+  ${activeAssessment ? `
+    <div style="margin-bottom:30px;">
+      <h2 style="font-size:18px;font-weight:700;color:#1e3a5f;margin-bottom:20px;border-bottom:2px solid #1e3a5f;padding-bottom:10px;">
+        Desempenho por Questão — ${activeAssessment.title}
+      </h2>
+      <div style="background:#fff;border:1px solid #e5e7eb;border-radius:12px;padding:24px;">
+        ${statsHtml}
+      </div>
+    </div>
+  ` : ""}
+
+  <div style="margin-top:60px;padding-top:20px;border-top:1px solid #e5e7eb;font-size:11px;color:#9ca3af;text-align:center;">
+    Documento oficial do Sistema de Gestão Acadêmica FATEC
+  </div>
+</body>
+</html>`
+
+  openAndPrintHTML(html, 1000, 800)
+}
+
+export function printAnswerKeyPDF({ assessment, questions }: { assessment: Assessment, questions: Question[] }): void {
+  const orderedQuestions = assessment.questionIds
+    .map((id) => questions.find((q) => q.id === id))
+    .filter(Boolean) as Question[]
+
+  const rows = orderedQuestions.map((q, i) => {
+    const correctLabel = getCorrectLabel(q)
+    const isDiscursive = q.type === "discursive"
+
+    let optionsHTML = ""
+    const isChoiceType = q.type === "multiple-choice" || q.type === "incorrect-alternative" || q.type === "true-false"
+    if (isChoiceType) {
+      const displayChoices = q.type === "true-false"
+        ? [{ id: "true", text: "Verdadeiro" }, { id: "false", text: "Falso" }]
+        : (q.choices || []).filter(c => c.text && c.text.trim() !== "")
+
+      optionsHTML = `<ul style="margin:8px 0 0 0;padding:0;list-style:none;">
+        ${displayChoices.map((c, idx) => {
+          const letter = String.fromCharCode(97 + idx)
+          const isCorrect = q.type === "true-false" ? (c.id === q.correctAnswer) : (c.id === q.correctAnswer)
+          return `
+            <li style="margin:4px 0;padding:6px 12px;border-radius:6px;font-size:13px;
+                background:${isCorrect ? "#dcfce7" : "#f9fafb"};
+                color:${isCorrect ? "#166534" : "#374151"};
+                border:1px solid ${isCorrect ? "#166534" : "#e5e7eb"}">
+                <strong>(${letter})</strong> ${c.text}${isCorrect ? " (Correta)" : ""}
+            </li>
+          `
+        }).join("")}
+      </ul>`
+    }
+
+    return `
+      <div style="margin-bottom:24px;padding:16px;border:1px solid #e5e7eb;border-radius:12px;break-inside:avoid;background:#fff;">
+        <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px;">
+          <span style="font-size:12px;font-weight:700;color:#1e3a5f;text-transform:uppercase;letter-spacing:1px;">
+            Questão ${i + 1} &nbsp;·&nbsp; ${typeLabel(q.type)}
+          </span>
+          <span style="font-size:11px;color:#6b7280;font-weight:600;">GABARITO OFICIAL</span>
+        </div>
+        <p style="margin:0 0 12px 0;font-size:14px;color:#111827;line-height:1.6;font-weight:500;">${q.text}</p>
+        ${optionsHTML}
+        ${isDiscursive ? `
+          <div style="margin-top:10px;padding:12px;background:#f8fafc;border:1px solid #e2e8f0;border-radius:8px;font-size:13px;color:#1e3a5f;font-weight:600;font-style:italic;">
+            Nota: Questão discursiva. Requer correção manual baseada no conteúdo ensinado.
+          </div>
+        ` : `
+          <div style="margin-top:12px;padding:10px 14px;background:#dcfce7;border-radius:8px;font-size:13px;color:#166534;font-weight:700;display:inline-block;">
+            Resposta Correta: ${correctLabel}
+          </div>
+        `}
+      </div>
+    `
+  }).join("")
+
+  const html = `<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+  <meta charset="UTF-8"/>
+  <title>Gabarito — ${assessment.title}</title>
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body { font-family: 'Segoe UI', Arial, sans-serif; color: #111827; background: #f3f4f6; padding: 40px; }
+    @media print { 
+      body { padding: 0; background: #fff; } 
+      .no-print { display: none; }
+    }
+  </style>
+</head>
+<body>
+  <div style="max-width:800px;margin:0 auto;background:#fff;padding:40px;border-radius:16px;box-shadow:0 4px 6px -1px rgba(0,0,0,0.1);">
+    <!-- Header -->
+    <div style="border-bottom:4px solid #1e3a5f;padding-bottom:20px;margin-bottom:30px;text-align:center;">
+      <div style="font-size:12px;font-weight:800;color:#f97316;text-transform:uppercase;letter-spacing:2px;margin-bottom:8px;">${assessment.institution || "FATEC"}</div>
+      <h1 style="font-size:26px;font-weight:800;color:#1e3a5f;margin:0;">GABARITO OFICIAL</h1>
+      <div style="font-size:18px;color:#4b5563;margin-top:4px;font-weight:600;">${assessment.title}</div>
+      <div style="font-size:13px;color:#6b7280;margin-top:8px;">Professor: ${assessment.professor} &nbsp;·&nbsp; Gerado em ${new Date().toLocaleDateString("pt-BR")}</div>
+    </div>
+
+    <!-- Content -->
+    ${rows}
+
+    <!-- Footer -->
+    <div style="margin-top:40px;padding-top:20px;border-top:1px solid #e5e7eb;font-size:12px;color:#9ca3af;text-align:center;">
+      Documento gerado pelo Sistema de Avaliações FATEC — Página 1 de 1
+    </div>
+  </div>
+</body>
+</html>`
+
+  openAndPrintHTML(html, 900, 800)
+}
+export function printSubmissionsTablePDF({ submissions, assessment }: { submissions: StudentSubmission[], assessment: Assessment }): void {
+  const rows = submissions.map((s, i) => `
+    <tr style="border-bottom: 1px solid #e5e7eb;">
+      <td style="padding: 12px; font-size: 13px; color: #111827; text-align: center;">${i + 1}</td>
+      <td style="padding: 12px; font-size: 13px; color: #111827;">
+        <div style="font-weight: 600;">${s.studentName}</div>
+        <div style="font-size: 11px; color: #6b7280;">${s.studentEmail}</div>
+      </td>
+      <td style="padding: 12px; font-size: 13px; font-weight: 700; color: #1e3a5f; text-align: center;">
+        ${s.score.toFixed(1)} <span style="font-size: 11px; font-weight: 400; color: #6b7280;">/ ${s.totalPoints}</span>
+      </td>
+      <td style="padding: 12px; font-size: 13px; color: #111827; text-align: center;">${formatTime(s.timeElapsedSeconds)}</td>
+      <td style="padding: 12px; font-size: 13px; color: #111827; text-align: center;">${formatDate(s.submittedAt)}</td>
+    </tr>
+  `).join("")
+
+  const html = `<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+  <meta charset="UTF-8"/>
+  <title>Resumo de Notas — ${assessment.title}</title>
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body { font-family: 'Segoe UI', Arial, sans-serif; color: #111827; background: #fff; padding: 40px; }
+    table { width: 100%; border-collapse: collapse; margin-top: 20px; }
+    th { text-align: left; background: #f8fafc; padding: 12px; font-size: 11px; font-weight: 700; color: #6b7280; text-transform: uppercase; letter-spacing: 0.5px; border-bottom: 2px solid #e2e8f0; }
+    @media print { body { padding: 0; } .no-print { display: none; } }
+  </style>
+</head>
+<body>
+  <div style="border-bottom: 4px solid #1e3a5f; padding-bottom: 20px; margin-bottom: 30px;">
+    <div style="display: flex; justify-content: space-between; align-items: flex-end;">
+      <div>
+        <div style="font-size: 12px; font-weight: 800; color: #f97316; text-transform: uppercase; letter-spacing: 2px; margin-bottom: 4px;">${assessment.institution || "FATEC"}</div>
+        <h1 style="font-size: 24px; font-weight: 800; color: #1e3a5f; margin: 0;">Resumo de Notas</h1>
+        <div style="font-size: 16px; color: #4b5563; margin-top: 4px; font-weight: 600;">${assessment.title}</div>
+      </div>
+      <div style="text-align: right;">
+        <div style="font-size: 12px; color: #6b7280;">Total de Envios: <strong>${submissions.length}</strong></div>
+        <div style="font-size: 12px; color: #6b7280;">Data: ${new Date().toLocaleDateString("pt-BR")}</div>
+      </div>
+    </div>
+  </div>
+
+  <table>
+    <thead>
+      <tr>
+        <th style="width: 40px; text-align: center;">#</th>
+        <th>Aluno / E-mail</th>
+        <th style="text-align: center;">Nota</th>
+        <th style="text-align: center;">Tempo</th>
+        <th style="text-align: center;">Enviado em</th>
+      </tr>
+    </thead>
+    <tbody>
+      ${rows}
+    </tbody>
+  </table>
+
+  <div style="margin-top: 40px; padding-top: 20px; border-top: 1px solid #e5e7eb; font-size: 11px; color: #9ca3af; text-align: center;">
+    Documento gerado pelo Sistema de Avaliações FATEC — Gerado em ${new Date().toLocaleString("pt-BR")}
+  </div>
+</body>
+</html>`
+
+  openAndPrintHTML(html, 1000, 800)
+}
+
+export function printCurriculumPDF(semesters: Semester[], disciplines: Discipline[]): void {
+  const semestersHtml = semesters.sort((a,b) => a.order - b.order).map(s => {
+    const sDisciplines = disciplines.filter(d => d.semesterId === s.id).sort((a,b) => a.order - b.order)
+    const rows = sDisciplines.map(d => `
+      <tr style="border-bottom: 1px solid #eee;">
+        <td style="padding: 10px; font-size: 13px;">${d.name}</td>
+        <td style="padding: 10px; font-size: 13px; color: #666;">${d.professorName || 'Não atribuído'}</td>
+      </tr>
+    `).join('')
+
+    return `
+      <div style="margin-bottom: 30px; break-inside: avoid;">
+        <h3 style="background: #f1f5f9; padding: 10px; border-left: 4px solid #1e3a5f; margin: 0; font-size: 15px; color: #1e3a5f;">${s.name}</h3>
+        <table style="width: 100%; border-collapse: collapse;">
+          <thead>
+            <tr style="text-align: left; background: #fafafa; border-bottom: 2px solid #e2e8f0;">
+              <th style="padding: 10px; font-size: 11px; text-transform: uppercase; color: #64748b;">Disciplina</th>
+              <th style="padding: 10px; font-size: 11px; text-transform: uppercase; color: #64748b;">Professor</th>
+            </tr>
+          </thead>
+          <tbody>${rows}</tbody>
+        </table>
+      </div>
+    `
+  }).join('')
+
+  const html = `<!DOCTYPE html><html><head><meta charset="UTF-8"><title>Grade Curricular - FATEC</title><style>body{font-family: Arial, sans-serif; padding: 40px; color: #334155;} @media print { body { padding: 0; } }</style></head>
+  <body>
+    <div style="text-align: center; margin-bottom: 40px; border-bottom: 4px solid #1e3a5f; padding-bottom: 20px;">
+      <h1 style="margin: 0; color: #1e3a5f;">Grade Curricular</h1>
+      <p style="margin: 5px 0 0 0; color: #64748b;">Faculdade de Teologia e Cultura — FATEC</p>
+    </div>
+    ${semestersHtml}
+    <div style="margin-top: 40px; text-align: center; font-size: 11px; color: #94a3b8;">Gerado em ${new Date().toLocaleDateString('pt-BR')}</div>
+  </body></html>`
+
+  openAndPrintHTML(html, 900, 700)
+}
+
+export function printProfessorsPDF(professors: ProfessorAccount[], assignments: ProfessorDiscipline[], disciplines: Discipline[]): void {
+  const rows = professors.map(p => {
+    const pDisciplines = assignments.filter(a => a.professorId === p.id)
+      .map(a => disciplines.find(d => d.id === a.disciplineId)?.name)
+      .filter(Boolean).join(', ')
+
+    return `
+      <tr style="border-bottom: 1px solid #eee;">
+        <td style="padding: 10px; font-size: 12px; font-weight: 600;">${p.name}</td>
+        <td style="padding: 10px; font-size: 11px;">${p.email}</td>
+        <td style="padding: 10px; font-size: 11px;">${p.active ? '<span style="color: green;">Ativo</span>' : '<span style="color: red;">Inativo</span>'}</td>
+        <td style="padding: 10px; font-size: 10px; color: #64748b;">${pDisciplines || 'Sem disciplinas'}</td>
+      </tr>
+    `
+  }).join('')
+
+  const html = `<!DOCTYPE html><html><head><meta charset="UTF-8"><title>Corpo Docente - FATEC</title><style>body{font-family: Arial, sans-serif; padding: 40px;} @media print { body { padding: 0; } }</style></head>
+  <body>
+    <div style="border-bottom: 4px solid #1e3a5f; padding-bottom: 10px; margin-bottom: 20px;">
+      <h1 style="margin: 0; color: #1e3a5f;">Corpo Docente e Mestres</h1>
+    </div>
+    <table style="width: 100%; border-collapse: collapse;">
+      <thead>
+        <tr style="text-align: left; background: #f8fafc; border-bottom: 2px solid #cbd5e1;">
+          <th style="padding: 10px; font-size: 11px; text-transform: uppercase;">Nome</th>
+          <th style="padding: 10px; font-size: 11px; text-transform: uppercase;">E-mail</th>
+          <th style="padding: 10px; font-size: 11px; text-transform: uppercase;">Status</th>
+          <th style="padding: 10px; font-size: 11px; text-transform: uppercase;">Disciplinas</th>
+        </tr>
+      </thead>
+      <tbody>${rows}</tbody>
+    </table>
+  </body></html>`
+
+  openAndPrintHTML(html, 900, 700)
+}
+
+export function printFinancialReportPDF(charges: FinancialCharge[], students: StudentProfile[]): void {
+  const total = charges.reduce((acc, c) => acc + c.amount, 0)
+  const paid = charges.filter(c => c.status === 'paid').reduce((acc, c) => acc + c.amount, 0)
+  const pending = total - paid
+
+  interface StudentStat { name: string; paid: number; pending: number; status: string; statusColor: string }
+  
+  const statsMap: Record<string, StudentStat> = {}
+  
+  charges.forEach(c => {
+    if (!c.studentId) return
+    if (!statsMap[c.studentId]) {
+      const student = students.find(s => s.id === c.studentId)
+      statsMap[c.studentId] = {
+        name: student?.name || 'N/A',
+        paid: 0,
+        pending: 0,
+        status: '',
+        statusColor: ''
+      }
+    }
+    
+    if (c.status === 'paid') statsMap[c.studentId].paid += c.amount
+    else statsMap[c.studentId].pending += c.amount
+  })
+
+  const sortedStats = Object.values(statsMap).sort((a, b) => a.name.localeCompare(b.name))
+
+  const rows = sortedStats.map(s => {
+    const statusText = s.pending === 0 ? 'PAGO' : 'PENDENTE'
+    const statusColor = s.pending === 0 ? 'green' : '#d97706'
+    
+    return `
+      <tr style="border-bottom: 1px solid #eee;">
+        <td style="padding: 10px; font-size: 13px; font-weight: 600;">${s.name}</td>
+        <td style="padding: 10px; font-size: 13px; color: green; font-weight: 700;">R$ ${s.paid.toFixed(2)}</td>
+        <td style="padding: 10px; font-size: 13px; color: #dc2626; font-weight: 700;">R$ ${s.pending.toFixed(2)}</td>
+        <td style="padding: 10px; font-size: 11px; text-transform: uppercase; font-weight: bold; color: ${statusColor}">${statusText}</td>
+      </tr>
+    `
+  }).join('')
+
+  const html = `<!DOCTYPE html><html><head><meta charset="UTF-8"><title>Relatório Financeiro Consolidado</title><style>body{font-family: Arial, sans-serif; padding: 30px;} @media print { body { padding: 0; } }</style></head>
+  <body>
+    <div style="border-bottom: 5px solid #1e3a5f; padding-bottom: 15px; margin-bottom: 25px; display: flex; justify-content: space-between; align-items: flex-end;">
+      <div>
+        <div style="font-size: 12px; font-weight: bold; color: #f97316; text-transform: uppercase; margin-bottom: 4px;">Faculdade de Teologia e Cultura — FATEC</div>
+        <h1 style="margin: 0; color: #1e3a5f; font-size: 28px;">Relatório Financeiro por Aluno</h1>
+      </div>
+      <div style="text-align: right; font-size: 14px;">
+        <div style="margin-bottom: 2px;">Total Geral: <strong>R$ ${total.toFixed(2)}</strong></div>
+        <div style="color: green; margin-bottom: 2px;">Total Recebido: <strong>R$ ${paid.toFixed(2)}</strong></div>
+        <div style="color: red;">Total Pendente: <strong>R$ ${pending.toFixed(2)}</strong></div>
+      </div>
+    </div>
+    <table style="width: 100%; border-collapse: collapse;">
+      <thead><tr style="text-align: left; background: #f1f5f9; border-bottom: 3px solid #1e3a5f;">
+        <th style="padding: 12px; font-size: 11px; text-transform: uppercase;">ALUNO</th>
+        <th style="padding: 12px; font-size: 11px; text-transform: uppercase;">VALOR PAGO (RECEBIDO)</th>
+        <th style="padding: 12px; font-size: 11px; text-transform: uppercase;">VALOR DEVEDOR (PENDENTE)</th>
+        <th style="padding: 12px; font-size: 11px; text-transform: uppercase;">SITUAÇÃO</th>
+      </tr></thead>
+      <tbody>${rows}</tbody>
+    </table>
+    <div style="margin-top: 40px; text-align: center; font-size: 11px; color: #94a3b8; border-top: 1px solid #eee; padding-top: 20px;">
+      Relatório gerado em ${new Date().toLocaleDateString('pt-BR')} às ${new Date().toLocaleTimeString('pt-BR')}
+    </div>
+  </body></html>`
+
+  openAndPrintHTML(html, 1000, 800)
+}
+
+export function printStudentFinancialReportPDF(student: StudentProfile, charges: FinancialCharge[]): void {
+  const studentCharges = charges.filter(c => c.studentId === student.id).sort((a, b) => new Date(a.dueDate).getTime() - new Date(b.dueDate).getTime())
+  const total = studentCharges.reduce((acc, c) => acc + c.amount, 0)
+  const paid = studentCharges.filter(c => c.status === 'paid').reduce((acc, c) => acc + c.amount, 0)
+  const pending = studentCharges.filter(c => c.status !== 'paid' && c.status !== 'cancelled' && c.status !== 'bolsa100' && c.status !== 'isento').reduce((acc, c) => acc + c.amount, 0)
+
+  const rows = studentCharges.map(c => {
+    let statusText = "Pendente"
+    let statusColor = "#d97706"
+    if (c.status === "paid") { statusText = "Pago"; statusColor = "green" }
+    else if (c.status === "late") { statusText = "Atrasado"; statusColor = "red" }
+    else if (c.status === "cancelled") { statusText = "Cancelado"; statusColor = "gray" }
+    else if (c.status === "bolsa100") { statusText = "Bolsa 100%"; statusColor = "#2563eb" }
+    else if (c.status === "bolsa50") { statusText = "Bolsa 50%"; statusColor = "#2563eb" }
+    else if (c.status === "isento") { statusText = "Isento"; statusColor = "#9333ea" }
+
+    const typeLabel = ({"enrollment": "Matrícula", "monthly": "Mensalidade", "second_call": "2ª Chamada", "final_exam": "Prova Final", "expense": "Despesa", "other": "Outros" } as Record<string, string>)[c.type] || c.type
+
+    return `
+      <tr style="border-bottom: 1px solid #eee;">
+        <td style="padding: 10px; font-size: 13px;">${c.description}</td>
+        <td style="padding: 10px; font-size: 13px; text-align: center;">${typeLabel}</td>
+        <td style="padding: 10px; font-size: 13px; text-align: center;">${new Date(c.dueDate).toLocaleDateString("pt-BR")}</td>
+        <td style="padding: 10px; font-size: 13px; text-align: center; font-weight: bold;">R$ ${c.amount.toFixed(2)}</td>
+        <td style="padding: 10px; font-size: 11px; text-align: center; text-transform: uppercase; font-weight: bold; color: ${statusColor}">${statusText}</td>
+      </tr>
+    `
+  }).join('')
+
+  const html = `<!DOCTYPE html><html><head><meta charset="UTF-8"><title>Extrato Financeiro - ${student.name}</title><style>body{font-family: Arial, sans-serif; padding: 30px;} @media print { body { padding: 0; } }</style></head>
+  <body>
+    <div style="border-bottom: 5px solid #1e3a5f; padding-bottom: 15px; margin-bottom: 25px; display: flex; justify-content: space-between; align-items: flex-end;">
+      <div>
+        <div style="font-size: 12px; font-weight: bold; color: #f97316; text-transform: uppercase; margin-bottom: 4px;">Faculdade de Teologia e Cultura — FATEC</div>
+        <h1 style="margin: 0; color: #1e3a5f; font-size: 26px;">Extrato Financeiro Individual</h1>
+        <div style="margin-top: 8px; font-size: 16px; color: #334155;"><strong>Aluno:</strong> ${student.name} (${student.enrollment_number})</div>
+      </div>
+      <div style="text-align: right; font-size: 14px; background: #f8fafc; padding: 10px 15px; border-radius: 8px; border: 1px solid #e2e8f0;">
+        <div style="margin-bottom: 4px; color: #334155;">Total de Lançamentos: <strong>${studentCharges.length}</strong></div>
+        <div style="color: green; margin-bottom: 4px;">Valor Pago: <strong>R$ ${paid.toFixed(2)}</strong></div>
+        <div style="color: red; font-size: 16px;">Pendente: <strong>R$ ${pending.toFixed(2)}</strong></div>
+      </div>
+    </div>
+    
+    <table style="width: 100%; border-collapse: collapse;">
+      <thead><tr style="text-align: left; background: #f1f5f9; border-bottom: 3px solid #1e3a5f;">
+        <th style="padding: 12px; font-size: 11px; text-transform: uppercase;">DESCRIÇÃO</th>
+        <th style="padding: 12px; font-size: 11px; text-transform: uppercase; text-align: center;">TIPO</th>
+        <th style="padding: 12px; font-size: 11px; text-transform: uppercase; text-align: center;">VENCIMENTO</th>
+        <th style="padding: 12px; font-size: 11px; text-transform: uppercase; text-align: center;">VALOR</th>
+        <th style="padding: 12px; font-size: 11px; text-transform: uppercase; text-align: center;">STATUS</th>
+      </tr></thead>
+      <tbody>${rows}</tbody>
+    </table>
+    
+    <div style="margin-top: 40px; text-align: center; font-size: 11px; color: #94a3b8; border-top: 1px solid #eee; padding-top: 20px;">
+      Documento gerado em ${new Date().toLocaleDateString('pt-BR')} às ${new Date().toLocaleTimeString('pt-BR')} pelo Sistema FATEC.
+    </div>
+  </body></html>`
+
+  openAndPrintHTML(html, 1000, 800)
+}
+
+export function printGradesReportPDF(grades: StudentGrade[], disciplineName: string, settings: GradeSettings): void {
+  const rows = grades.map(g => {
+    const final = calculateGlobalAverage(g, settings)
+    const status = parseFloat(final) >= 7 ? '<span style="color: green;">APROVADO</span>' : '<span style="color: red;">REPROVADO</span>'
+    const displayPresence = g.attendanceScore || 0
+    return `
+      <tr style="border-bottom: 1px solid #eee;">
+        <td style="padding: 8px; font-size: 12px;">${g.studentName}</td>
+        <td style="padding: 8px; font-size: 12px; text-align: center;">${g.examGrade.toFixed(1)}</td>
+        <td style="padding: 8px; font-size: 12px; text-align: center;">${g.worksGrade.toFixed(1)}</td>
+        <td style="padding: 8px; font-size: 12px; text-align: center;">${g.seminarGrade.toFixed(1)}</td>
+        <td style="padding: 8px; font-size: 12px; text-align: center;">${displayPresence.toFixed(1)}</td>
+        <td style="padding: 8px; font-size: 12px; text-align: center; font-weight: bold;">${final}</td>
+        <td style="padding: 8px; font-size: 10px; text-align: center; font-weight: bold;">${status}</td>
+      </tr>
+    `
+  }).join('')
+
+  const html = `<!DOCTYPE html><html><head><meta charset="UTF-8"><title>Diário de Notas</title><style>body{font-family: Arial, sans-serif; padding: 30px;} @media print { body { padding: 0; } }</style></head>
+  <body>
+    <div style="border-bottom: 4px solid #1e3a5f; padding-bottom: 15px; margin-bottom: 20px;">
+      <h1 style="margin: 0; color: #1e3a5f; font-size: 22px;">Diário de Notas: ${disciplineName}</h1>
+    </div>
+    <table style="width: 100%; border-collapse: collapse;">
+      <thead><tr style="text-align: left; background: #f8fafc; border-bottom: 2px solid #cbd5e1;">
+        <th style="padding: 10px; font-size: 10px;">ALUNO</th>
+        <th style="padding: 10px; font-size: 10px; text-align: center;">PROVA</th>
+        <th style="padding: 10px; font-size: 10px; text-align: center;">TRABALHO</th>
+        <th style="padding: 10px; font-size: 10px; text-align: center;">SEMINÁRIO</th>
+        <th style="padding: 10px; font-size: 10px; text-align: center;">PRESENÇA</th>
+        <th style="padding: 10px; font-size: 10px; text-align: center;">MÉDIA</th>
+        <th style="padding: 10px; font-size: 10px; text-align: center;">SITUAÇÃO</th>
+      </tr></thead>
+      <tbody>${rows}</tbody>
+    </table>
+  </body></html>`
+
+  openAndPrintHTML(html, 1000, 800)
+}
+
+export function printAttendanceReportPDF(attendances: Attendance[], students: StudentProfile[], disciplineName: string): void {
+  const studentStats = students.map(s => {
+    const sAtt = attendances.filter(a => String(a.studentId) === String(s.id))
+    return {
+      presents: Math.min(sAtt.filter(a => a.isPresent === true).length, 4),
+      total: Math.min(sAtt.length, 4)
+    }
+  })
+  const totalPresences = studentStats.reduce((acc, s) => acc + s.presents, 0)
+  const totalPossible = studentStats.reduce((acc, s) => acc + s.total, 0)
+  const totalAbsences = totalPossible - totalPresences
+  const globalRate = totalPossible > 0 ? (totalPresences / totalPossible * 100).toFixed(1) : "0"
+
+  console.log(`[Agente Especialista] Gerando relatório para "${disciplineName}". Registros recebidos: ${attendances.length}`);
+
+  const logs = students.map(s => {
+    // Robust comparison: ensure both sides are strings
+    const sAtt = attendances.filter(a => String(a.studentId) === String(s.id))
+    const presents = Math.min(sAtt.filter(a => a.isPresent === true).length, 4)
+    const total = Math.min(sAtt.length, 4) || 4
+    const pct = total > 0 ? (presents/total)*100 : 0
+    return { name: s.name, presents, total, pct, enrollment: s.enrollment_number }
+  })
+
+  const rows = logs.sort((a,b) => a.name.localeCompare(b.name)).map(l => `
+    <tr style="border-bottom: 1px solid #eee;">
+      <td style="padding: 10px; font-size: 13px; font-weight: 600;">${l.name}</td>
+      <td style="padding: 10px; font-size: 11px; color: #64748b;">${l.enrollment}</td>
+      <td style="padding: 10px; font-size: 13px; text-align: center;">${l.presents} / ${l.total}</td>
+      <td style="padding: 10px; font-size: 13px; text-align: center; font-weight: bold; color: ${l.pct < 75 ? '#dc2626' : '#16a34a'}">${l.pct.toFixed(1)}%</td>
+    </tr>
+  `).join('')
+
+  const html = `<!DOCTYPE html><html><head><meta charset="UTF-8"><title>Relatório Consolidado de Frequência</title><style>
+    body{font-family: Arial, sans-serif; padding: 40px; color: #1e293b;}
+    @media print { body { padding: 0; } }
+    .header { border-bottom: 5px solid #1e3a5f; padding-bottom: 20px; margin-bottom: 30px; }
+    .stats-dash { display: flex; gap: 20px; margin-bottom: 30px; }
+    .stat-box { flex: 1; padding: 15px; border-radius: 8px; text-align: center; color: white; }
+  </style></head>
+  <body>
+    <div class="header">
+      <div style="font-size: 12px; font-weight: bold; color: #f97316; text-transform: uppercase; margin-bottom: 4px;">Faculdade de Teologia e Cultura — FATEC</div>
+      <h1 style="margin: 0; color: #1e3a5f; font-size: 26px;">Relatório Consolidado de Frequência</h1>
+      <div style="margin-top: 5px; font-size: 15px; color: #475569;">Disciplina: <strong>${disciplineName}</strong></div>
+    </div>
+
+    <div class="stats-dash">
+      <div style="background: #1e3a5f;" class="stat-box">
+        <div style="font-size: 24px; font-weight: 800;">${attendances.length}</div>
+        <div style="font-size: 10px; opacity: 0.8; text-transform: uppercase;">Total de Registros</div>
+      </div>
+      <div style="background: #16a34a;" class="stat-box">
+        <div style="font-size: 24px; font-weight: 800;">${totalPresences}</div>
+        <div style="font-size: 10px; opacity: 0.8; text-transform: uppercase;">Presenças Totais</div>
+      </div>
+      <div style="background: #dc2626;" class="stat-box">
+        <div style="font-size: 24px; font-weight: 800;">${totalAbsences}</div>
+        <div style="font-size: 10px; opacity: 0.8; text-transform: uppercase;">Ausências Totais</div>
+      </div>
+      <div style="background: #f59e0b;" class="stat-box">
+        <div style="font-size: 24px; font-weight: 800;">${globalRate}%</div>
+        <div style="font-size: 10px; opacity: 0.8; text-transform: uppercase;">Média de Presença</div>
+      </div>
+    </div>
+
+    <table style="width: 100%; border-collapse: collapse;">
+      <thead><tr style="text-align: left; background: #f1f5f9; border-bottom: 3px solid #1e3a5f;">
+        <th style="padding: 12px; font-size: 11px; text-transform: uppercase;">Aluno</th>
+        <th style="padding: 12px; font-size: 11px; text-transform: uppercase;">Matrícula</th>
+        <th style="padding: 12px; font-size: 11px; text-transform: uppercase; text-align: center;">Presenças / Aulas</th>
+        <th style="padding: 12px; font-size: 11px; text-transform: uppercase; text-align: center;">Taxa (%)</th>
+      </tr></thead>
+      <tbody>${rows}</tbody>
+    </table>
+    <div style="margin-top: 30px; font-size: 11px; color: #64748b; font-style: italic;">* Documento gerado para fins de acompanhamento acadêmico. Frequência mínima recomendada: 75%.</div>
+    <div style="margin-top: 40px; text-align: center; font-size: 10px; color: #94a3b8; border-top: 1px solid #eee; padding-top: 20px;">
+      Gerado em ${new Date().toLocaleDateString('pt-BR')} às ${new Date().toLocaleTimeString('pt-BR')}
+    </div>
+  </body></html>`
+
+  openAndPrintHTML(html, 1000, 800)
+}
+
+export function printAttendanceAnalysisPDF(analysis: any, disciplineName: string): void {
+  const { stats, issues } = analysis;
+  console.log(`[Agente Especialista] Analisando registros de "${disciplineName}". Status:`, stats);
+  
+  const issueRows = issues.map((issue: any) => {
+    const color = issue.severity === 'Alta' ? '#dc2626' : issue.severity === 'Média' ? '#d97706' : '#16a34a';
+    const bg = issue.severity === 'Alta' ? '#fef2f2' : issue.severity === 'Média' ? '#fffbeb' : '#f0fdf4';
+
+    return `
+      <div style="margin-bottom: 15px; padding: 15px; border-radius: 8px; background: ${bg}; border-left: 5px solid ${color};">
+        <div style="display: flex; justify-content: space-between; align-items: flex-start; margin-bottom: 5px;">
+           <span style="font-size: 11px; font-weight: 800; text-transform: uppercase; color: ${color}; letter-spacing: 0.5px;">${issue.type}</span>
+           <span style="font-size: 10px; font-weight: 900; background: ${color}; color: white; padding: 2px 8px; border-radius: 4px;">${issue.severity.toUpperCase()}</span>
+        </div>
+        <p style="margin: 0; font-size: 13px; color: #1e293b; line-height: 1.5;">${issue.description}</p>
+      </div>
+    `
+  }).join('')
+
+  const recommendations = [];
+  if (issues.length > 3) recommendations.push("Implementar sistema de alertas automáticos via WhatsApp para alunos com alta taxa de falta.");
+  if (stats.totalRecords === 0) recommendations.push("Nenhum registro de frequência foi encontrado. Inicie o processo de chamada imediatamente.");
+  if (parseFloat(stats.absenceRate) > 25) recommendations.push("Investigar causas de absenteísmo elevado na disciplina através de conversa com os alunos.");
+  if (issues.length === 0) recommendations.push("Nenhuma falha estrutural detectada. O gerenciamento de frequência está excelente.");
+  
+  const recHtml = recommendations.map((r) => `<li style="margin-bottom: 10px; font-size: 13px; font-weight: 500;">${r}</li>`).join('')
+
+  const html = `<!DOCTYPE html><html><head><meta charset="UTF-8"><title>Análise Estrutural do Agente Especialista</title><style>
+    body{font-family: Arial, sans-serif; padding: 40px; color: #1e293b; line-height: 1.4;}
+    @media print { body { padding: 0; } }
+    .header { border-bottom: 6px solid #dc2626; padding-bottom: 20px; margin-bottom: 30px; }
+    .stats-grid { display: grid; grid-template-columns: repeat(4, 1fr); gap: 15px; margin-bottom: 30px; }
+    .stat-card { padding: 15px; background: #f8fafc; border: 1px solid #e2e8f0; border-radius: 8px; text-align: center; }
+    .stat-val { font-size: 26px; font-weight: 900; color: #1e3a5f; }
+    .stat-lbl { font-size: 10px; color: #64748b; text-transform: uppercase; margin-top: 5px; font-weight: 800; letter-spacing: 0.5px; }
+  </style></head>
+  <body>
+    <div class="header">
+      <div style="font-size: 12px; font-weight: 900; color: #dc2626; text-transform: uppercase; margin-bottom: 4px; letter-spacing: 1px;">SISTEMA INTELIGENTE — AGENTE ESPECIALISTA</div>
+      <h1 style="margin: 0; color: #1e3a5f; font-size: 32px; font-weight: 900;">Análise Estrutural de Frequência</h1>
+      <div style="margin-top: 8px; font-size: 16px; color: #475569;">Disciplina: <strong style="color: #1e3a5f;">${disciplineName}</strong></div>
+    </div>
+
+    <div class="stats-grid">
+      <div class="stat-card">
+        <div class="stat-val">${stats.totalStudents}</div>
+        <div class="stat-lbl">Alunos na Turma</div>
+      </div>
+      <div class="stat-card">
+        <div class="stat-val">${stats.totalRecords}</div>
+        <div class="stat-lbl">Registros Coletados</div>
+      </div>
+      <div class="stat-card">
+        <div class="stat-val" style="color: #16a34a">${stats.present}</div>
+        <div class="stat-lbl">Presenças Registradas</div>
+      </div>
+      <div class="stat-card">
+        <div class="stat-val" style="color: #dc2626">${stats.absenceRate}%</div>
+        <div class="stat-lbl">Taxa de Absenteísmo</div>
+      </div>
+    </div>
+
+    <h2 style="font-size: 18px; color: #1e3a5f; margin: 30px 0 20px 0; border-bottom: 3px solid #f1f5f9; padding-bottom: 10px; font-weight: 900;">DETECÇÃO DE FALHAS E ALERTAS</h2>
+    ${issueRows || '<div style="padding: 30px; background: #f0fdf4; color: #166534; border-radius: 12px; text-align: center; font-weight: 800; border: 2px dashed #16a34a;">✓ O AGENTE NÃO DETECTOU NENHUMA FALHA ESTRUTURAL NESTA DISCIPLINA.</div>'}
+
+    <div style="margin-top: 40px; padding: 25px; background: #f8fafc; border: 1px solid #e2e8f0; border-radius: 12px;">
+      <h3 style="margin-top: 0; font-size: 15px; color: #1e3a5f; text-transform: uppercase; font-weight: 900; letter-spacing: 0.5px;">🏥 Mapeamento de Recomendações Profissionais</h3>
+      <ul style="margin: 15px 0 0 20px; color: #334155;">${recHtml}</ul>
+    </div>
+
+    <div style="margin-top: 50px; text-align: center; font-size: 10px; color: #94a3b8; border-top: 1px solid #eee; padding-top: 20px; font-style: italic;">
+      Este documento foi gerado pelo Agente Especialista FATEC em ${new Date().toLocaleDateString('pt-BR')} às ${new Date().toLocaleTimeString('pt-BR')}
+    </div>
+  </body></html>`
+
+  openAndPrintHTML(html, 1000, 800)
+}
+
+export function printDailyAttendancePDF(date: string, disciplineName: string, students: StudentProfile[], attendanceMap: Record<string, boolean>): void {
+  const formattedDate = new Date(date + 'T12:00:00').toLocaleDateString('pt-BR');
+  console.log(`[Agente Especialista] Gerando chamada diária para ${date}. Mapa de presença:`, attendanceMap);
+  
+  const rows = students.sort((a, b) => a.name.localeCompare(b.name)).map((s, i) => {
+    // Robust ID check
+    const isPresent = attendanceMap[String(s.id)] === true;
+    return `
+      <tr style="border-bottom: 1px solid #eee;">
+        <td style="padding: 10px; font-size: 11px; text-align: center; color: #64748b;">${(i+1).toString().padStart(2, '0')}</td>
+        <td style="padding: 10px; font-size: 13px; font-weight: 600;">${s.name}</td>
+        <td style="padding: 10px; font-size: 11px; color: #64748b;">${s.enrollment_number}</td>
+        <td style="padding: 10px; font-size: 12px; text-align: center;">
+          <span style="font-weight: bold; color: ${isPresent ? '#16a34a' : '#dc2626'}">
+            ${isPresent ? 'PRESENTE' : 'FALTOU'}
+          </span>
+        </td>
+      </tr>
+    `
+  }).join('')
+
+  const html = `<!DOCTYPE html><html><head><meta charset="UTF-8"><title>Chamada do Dia - ${formattedDate}</title><style>
+    body{font-family: Arial, sans-serif; padding: 40px; color: #1e293b;}
+    @media print { body { padding: 0; } }
+    .header { border-bottom: 4px solid #1e3a5f; padding-bottom: 20px; margin-bottom: 30px; display: flex; justify-content: space-between; align-items: flex-end; }
+    table { width: 100%; border-collapse: collapse; }
+    th { text-align: left; background: #f8fafc; border-bottom: 2px solid #cbd5e1; padding: 12px 10px; font-size: 11px; text-transform: uppercase; color: #64748b; }
+  </style></head>
+  <body>
+    <div class="header">
+      <div>
+        <div style="font-size: 12px; font-weight: bold; color: #f97316; text-transform: uppercase; margin-bottom: 4px;">Faculdade de Teologia e Cultura — FATEC</div>
+        <h1 style="margin: 0; color: #1e3a5f; font-size: 24px;">Diário de Classe: Chamada do Dia</h1>
+        <div style="margin-top: 5px; font-size: 15px; color: #475569;">Disciplina: <strong>${disciplineName}</strong></div>
+      </div>
+      <div style="text-align: right;">
+        <div style="font-size: 18px; font-weight: 800; color: #1e3a5f;">${formattedDate}</div>
+        <div style="font-size: 12px; color: #64748b; margin-top: 4px;">Alunos na Lista: ${students.length}</div>
+      </div>
+    </div>
+    <table>
+      <thead><tr>
+        <th style="width: 40px; text-align: center;">Nº</th>
+        <th>NOME DO ALUNO</th>
+        <th>MATRÍCULA</th>
+        <th style="text-align: center;">STATUS</th>
+      </tr></thead>
+      <tbody>${rows}</tbody>
+    </table>
+    <div style="margin-top: 50px; display: flex; justify-content: space-between;">
+      <div style="width: 250px; border-top: 1px solid #000; padding-top: 8px; text-align: center; font-size: 11px;">Assinatura do Professor</div>
+      <div style="width: 200px; border-top: 1px solid #000; padding-top: 8px; text-align: center; font-size: 11px;">Secretaria Acadêmica</div>
+    </div>
+    <div style="margin-top: 40px; text-align: center; font-size: 10px; color: #94a3b8;">
+      Gerado eletronicamente em ${new Date().toLocaleDateString('pt-BR')} às ${new Date().toLocaleTimeString('pt-BR')}
+    </div>
+  </body></html>`
+
+  openAndPrintHTML(html, 1000, 800)
+}
+export function printProLaboreReceipt(data: {
+  professorName: string,
+  disciplineName: string,
+  className: string,
+  amount: number,
+  date: string,
+  institutionName?: string,
+  logo?: string
+}): void {
+  const formatter = new Intl.NumberFormat('pt-BR', { style: 'currency', currency: 'BRL' });
+  const amountStr = formatter.format(data.amount);
+  
+  // Basic numeric to words (extenso) simplified for BRL
+  const extenso = `${amountStr} (${data.amount.toLocaleString('pt-BR')} reais)`;
+
+  const html = `<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+  <meta charset="UTF-8"/>
+  <title>Recibo de Pagamento - ${data.professorName}</title>
+  <style>
+    @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;600;800&family=Playfair+Display:wght@700&display=swap');
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body { 
+      font-family: 'Inter', sans-serif; 
+      color: #1e293b; 
+      background: #fff; 
+      padding: 0;
+      display: flex;
+      justify-content: center;
+      align-items: flex-start;
+    }
+    .receipt {
+      width: 148mm; /* Half of A5, roughly 1/4 of A4 */
+      height: 105mm;
+      padding: 10mm;
+      border: 1px solid #e2e8f0;
+      position: relative;
+      overflow: hidden;
+      background: #fff;
+    }
+    .watermark {
+      position: absolute;
+      top: 50%;
+      left: 50%;
+      transform: translate(-50%, -50%) rotate(-30deg);
+      font-size: 80px;
+      font-weight: 900;
+      color: rgba(226, 232, 240, 0.3);
+      white-space: nowrap;
+      pointer-events: none;
+      z-index: 0;
+    }
+    header {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      margin-bottom: 6mm;
+      border-bottom: 2px solid #1e3a5f;
+      padding-bottom: 4mm;
+      position: relative;
+      z-index: 1;
+    }
+    .logo-container { display: flex; align-items: center; gap: 3mm; }
+    .logo-img { max-width: 40px; max-height: 40px; }
+    .inst-name { font-size: 14px; font-weight: 800; color: #1e3a5f; text-transform: uppercase; letter-spacing: 0.5px; }
+    .receipt-title { font-family: 'Playfair Display', serif; font-size: 24px; color: #1e3a5f; }
+    
+    .content { position: relative; z-index: 1; }
+    .amount-box {
+      background: #f8fafc;
+      border: 1px solid #e2e8f0;
+      padding: 3mm 5mm;
+      border-radius: 4px;
+      display: inline-block;
+      float: right;
+      font-weight: 800;
+      font-size: 18px;
+      color: #1e3a5f;
+    }
+    .text { font-size: 12px; line-height: 1.6; margin-top: 4mm; clear: both; }
+    .field { font-weight: 700; color: #334155; }
+    
+    footer {
+      margin-top: 10mm;
+      display: flex;
+      justify-content: space-between;
+      align-items: flex-end;
+      position: relative;
+      z-index: 1;
+    }
+    .sig-line {
+      border-top: 1px solid #94a3b8;
+      width: 60mm;
+      margin-top: 8mm;
+      text-align: center;
+      font-size: 10px;
+      color: #64748b;
+      padding-top: 1mm;
+    }
+    .date-loc { font-size: 11px; color: #64748b; }
+    
+    @media print {
+      body { background: none; padding: 0; }
+      .receipt { border: 1px solid #cbd5e1; }
+    }
+  </style>
+</head>
+<body>
+  <div class="receipt">
+    <div class="watermark">FATEC</div>
+    
+    <header>
+      <div class="logo-container">
+        ${data.logo ? `<img src="${data.logo}" class="logo-img" />` : ''}
+        <div class="inst-name">${data.institutionName || 'FATEC'}</div>
+      </div>
+      <div class="receipt-title">Recibo</div>
+    </header>
+
+    <div class="content">
+      <div class="amount-box">${amountStr}</div>
+      <p class="text">
+        Recebemos de <span class="field">${data.institutionName || 'Faculdade de Teologia e Cultura'}</span> a importância de 
+        <span class="field">${extenso}</span>, referente ao pagamento de <span class="field">Pro-labore</span> 
+        pela disciplina <span class="field">${data.disciplineName}</span> ministrada para a turma 
+        <span class="field">${data.className}</span>.
+      </p>
+    </div>
+
+    <footer>
+      <div class="date-loc">
+        Emitido em ${new Date(data.date).toLocaleDateString('pt-BR')}
+      </div>
+      <div class="sig-section">
+        <div class="sig-line">Assinatura do Docente</div>
+        <div style="font-size: 11px; font-weight: 700; text-align: center; margin-top: 1mm;">${data.professorName}</div>
+      </div>
+    </footer>
+  </div>
+</body>
+</html>`;
+
+  openAndPrintHTML(html, 800, 600)
+}
+
+export function printEnrollmentCertificatePDF(student: StudentProfile, className: string): void {
+  const issueDate = new Date().toLocaleDateString('pt-BR', {
+    day: '2-digit',
+    month: 'long',
+    year: 'numeric'
+  });
+
+  const html = `<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+  <meta charset="UTF-8"/>
+  <title>Comprovante de Matrícula — ${student.name}</title>
+  <style>
+    @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;600;700;800&family=Playfair+Display:wght@700&display=swap');
+    
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body { 
+      font-family: 'Inter', sans-serif; 
+      color: #1e293b; 
+      background: #f8fafc; 
+      padding: 40px;
+    }
+    
+    .certificate-container {
+      max-width: 800px;
+      margin: 0 auto;
+      background: #fff;
+      padding: 60px;
+      border: 1px solid #e2e8f0;
+      position: relative;
+      box-shadow: 0 10px 15px -3px rgba(0, 0, 0, 0.1);
+      overflow: hidden;
+    }
+
+    .certificate-container::before {
+      content: '';
+      position: absolute;
+      top: 10px; left: 10px; right: 10px; bottom: 10px;
+      border: 2px solid #1e3a8a;
+      pointer-events: none;
+    }
+    .certificate-container::after {
+      content: '';
+      position: absolute;
+      top: 15px; left: 15px; right: 15px; bottom: 15px;
+      border: 1px solid #94a3b8;
+      pointer-events: none;
+    }
+
+    .header {
+      text-align: center;
+      margin-bottom: 50px;
+      position: relative;
+    }
+
+    .logo-text {
+      font-family: 'Playfair Display', serif;
+      font-size: 32px;
+      font-weight: 700;
+      color: #1e3a8a;
+      margin-bottom: 4px;
+      letter-spacing: -0.5px;
+    }
+
+    .subtitle {
+      font-size: 12px;
+      font-weight: 700;
+      color: #64748b;
+      text-transform: uppercase;
+      letter-spacing: 3px;
+    }
+
+    .doc-title {
+      text-align: center;
+      margin-top: 60px;
+      margin-bottom: 40px;
+    }
+
+    .doc-title h1 {
+      font-size: 28px;
+      font-weight: 800;
+      color: #0f172a;
+      text-transform: uppercase;
+      letter-spacing: 1px;
+    }
+
+    .content {
+      font-size: 16px;
+      line-height: 1.8;
+      color: #334155;
+      text-align: justify;
+      margin-bottom: 60px;
+    }
+
+    .student-name {
+      font-weight: 800;
+      color: #1e3a8a;
+      text-decoration: underline;
+    }
+
+    .details-grid {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 20px;
+      margin: 40px 0;
+      padding: 24px;
+      background: #f1f5f9;
+      border-radius: 8px;
+    }
+
+    .detail-item {
+      display: flex;
+      flex-direction: column;
+    }
+
+    .detail-label {
+      font-size: 11px;
+      font-weight: 700;
+      color: #64748b;
+      text-transform: uppercase;
+      margin-bottom: 4px;
+    }
+
+    .detail-value {
+      font-size: 14px;
+      font-weight: 600;
+      color: #0f172a;
+    }
+
+    .footer {
+      margin-top: 80px;
+      text-align: center;
+    }
+
+    .signature-line {
+      width: 250px;
+      border-top: 1px solid #1e293b;
+      margin: 0 auto 10px;
+    }
+
+    .signature-title {
+      font-size: 12px;
+      font-weight: 600;
+      color: #64748b;
+    }
+
+    .watermark {
+      position: absolute;
+      top: 50%;
+      left: 50%;
+      transform: translate(-50%, -50%) rotate(-30deg);
+      font-size: 120px;
+      font-weight: 900;
+      color: rgba(30, 58, 138, 0.03);
+      white-space: nowrap;
+      pointer-events: none;
+      z-index: 0;
+    }
+
+    .auth-code {
+      position: absolute;
+      bottom: 30px;
+      left: 40px;
+      font-size: 9px;
+      color: #94a3b8;
+      font-family: monospace;
+    }
+
+    @media print {
+      body { background: #fff; padding: 0; }
+      .certificate-container { box-shadow: none; border: none; }
+      .certificate-container::before, .certificate-container::after { display: block; }
+    }
+  </style>
+</head>
+<body>
+  <div class="certificate-container">
+    <div class="watermark">FATEC OFICIAL</div>
+    
+    <div class="header">
+      <div class="logo-text">FATEC</div>
+      <div class="subtitle">Faculdade de Teologia e Cultura</div>
+    </div>
+
+    <div class="doc-title">
+      <h1>Comprovante de Matrícula</h1>
+    </div>
+
+    <div class="content">
+      Declaramos, para os devidos fins, que o(a) aluno(a) <span class="student-name">${student.name}</span> está regularmente matriculado(a) nesta instituição de ensino, cursando o programa acadêmico de Teologia Ministerial, sob a situação de <strong>MATRÍCULA ATIVA</strong>.
+    </div>
+
+    <div class="details-grid">
+      <div class="detail-item">
+        <span class="detail-label">Número de Matrícula</span>
+        <span class="detail-value">${student.enrollment_number || 'NÃO ATRIBUÍDO'}</span>
+      </div>
+      <div class="detail-item">
+        <span class="detail-label">Turma Atual</span>
+        <span class="detail-value">${className}</span>
+      </div>
+      <div class="detail-item">
+        <span class="detail-label">CPF</span>
+        <span class="detail-value">${student.cpf || 'NÃO INFORMADO'}</span>
+      </div>
+      <div class="detail-item">
+        <span class="detail-label">Data de Emissão</span>
+        <span class="detail-value">${issueDate}</span>
+      </div>
+    </div>
+
+    <div class="footer">
+      <div class="signature-line"></div>
+      <div class="signature-title">Diretoria Acadêmica - FATEC</div>
+      <div style="font-size: 10px; color: #94a3b8; margin-top: 20px;">
+        Este documento foi gerado eletronicamente e possui validade jurídica como comprovante oficial de vínculo acadêmico.
+      </div>
+    </div>
+
+    <div class="auth-code">
+      VALIDAÇÃO: ${student.id.substring(0, 8).toUpperCase()}-${new Date().getTime().toString(16).toUpperCase()}
+    </div>
+  </div>
+</body>
+</html>`
+
+  openAndPrintHTML(html, 900, 700)
+}
+
+export function printDisciplineQuestionsPDF({
+  discipline,
+  questions,
+  includeAnswerKey = true,
+}: {
+  discipline: Discipline
+  questions: Question[]
+  includeAnswerKey?: boolean
+}): void {
+  const issueDate = new Date().toLocaleDateString("pt-BR", {
+    day: "2-digit",
+    month: "long",
+    year: "numeric",
+  })
+
+  const typeLabels: Record<string, string> = {
+    "multiple-choice": "Múltipla Escolha",
+    "true-false": "Verdadeiro ou Falso",
+    "incorrect-alternative": "Alternativa Incorreta",
+    "fill-in-the-blank": "Completar Lacunas",
+    "matching": "Relacionar Colunas",
+    "discursive": "Dissertativa / Subjetiva",
+  }
+
+  const questionsHTML = questions
+    .map((q, idx) => {
+      const qNum = idx + 1
+      const qType = typeLabels[q.type] || "Questão"
+      const pts = q.points || 1
+
+      const choicesList: { id: string; text: string }[] = Array.isArray(q.choices)
+        ? q.choices
+        : (q.choices as any)?.options || []
+
+      const pairsList: { id: string; left: string; right: string }[] =
+        q.pairs || (q.choices as any)?.matchingPairs || []
+
+      let bodyHTML = ""
+
+      if (q.type === "multiple-choice" || q.type === "incorrect-alternative") {
+        bodyHTML = `
+          <div class="choices-container">
+            ${choicesList
+              .map((c, cIdx) => {
+                const letter = String.fromCharCode(65 + cIdx)
+                return `
+                  <div class="choice-item">
+                    <span class="choice-marker">(${letter})</span>
+                    <span class="choice-text">${c.text}</span>
+                  </div>
+                `
+              })
+              .join("")}
+          </div>
+        `
+      } else if (q.type === "true-false") {
+        bodyHTML = `
+          <div class="tf-container">
+            <div class="tf-option"><span class="tf-box">( &nbsp; )</span> Verdadeiro</div>
+            <div class="tf-option"><span class="tf-box">( &nbsp; )</span> Falso</div>
+          </div>
+        `
+      } else if (q.type === "matching" && pairsList.length > 0) {
+        bodyHTML = `
+          <div class="matching-container">
+            <div class="matching-col">
+              <div class="matching-col-title">Coluna A</div>
+              ${pairsList
+                .map((p, pIdx) => `
+                  <div class="matching-item">
+                    <strong>(${pIdx + 1})</strong> ${p.left}
+                  </div>
+                `)
+                .join("")}
+            </div>
+            <div class="matching-col">
+              <div class="matching-col-title">Coluna B</div>
+              ${pairsList
+                .map(() => `
+                  <div class="matching-item">
+                    <span class="matching-slot">( &nbsp; )</span> Definição correspondente
+                  </div>
+                `)
+                .join("")}
+            </div>
+          </div>
+        `
+      } else if (q.type === "fill-in-the-blank") {
+        bodyHTML = `
+          <div class="fill-container">
+            <div class="fill-line">Preenchimento: ____________________________________________________________________</div>
+          </div>
+        `
+      } else if (q.type === "discursive") {
+        bodyHTML = `
+          <div class="discursive-lines">
+            <div class="line"></div>
+            <div class="line"></div>
+            <div class="line"></div>
+            <div class="line"></div>
+          </div>
+        `
+      }
+
+      return `
+        <div class="question-card">
+          <div class="question-header">
+            <span class="question-badge">Questão ${qNum}</span>
+            <span class="question-type-badge">${qType}</span>
+            <span class="question-points">${pts} pt${pts > 1 ? "s" : ""}</span>
+          </div>
+          <div class="question-text">${q.text}</div>
+          ${bodyHTML}
+        </div>
+      `
+    })
+    .join("")
+
+  const answerKeyHTML = includeAnswerKey
+    ? `
+      <div class="answer-key-section">
+        <div class="page-break"></div>
+        <div class="answer-key-header">
+          <div class="answer-key-title">GABARITO OFICIAL — USO EXCLUSIVO DO PROFESSOR</div>
+          <div class="answer-key-subtitle">Disciplina: ${discipline.name} · ${questions.length} Questões Registradas</div>
+        </div>
+
+        <table class="answer-key-table">
+          <thead>
+            <tr>
+              <th style="width: 8%;">Nº</th>
+              <th style="width: 22%;">Tipo</th>
+              <th style="width: 25%;">Gabarito / Resposta Correta</th>
+              <th style="width: 45%;">Fundamentação Bíblica / Observações</th>
+            </tr>
+          </thead>
+          <tbody>
+            ${questions
+              .map((q, idx) => {
+                const choicesList: { id: string; text: string }[] = Array.isArray(q.choices)
+                  ? q.choices
+                  : (q.choices as any)?.options || []
+
+                let answerDisplay = q.correctAnswer || "—"
+                if (q.type === "multiple-choice" || q.type === "incorrect-alternative") {
+                  const foundChoice = choicesList.find((c) => c.id === q.correctAnswer)
+                  const choiceIndex = choicesList.findIndex((c) => c.id === q.correctAnswer)
+                  const letter = choiceIndex !== -1 ? String.fromCharCode(65 + choiceIndex) : q.correctAnswer
+                  answerDisplay = foundChoice ? `(${letter}) ${foundChoice.text}` : `(${letter})`
+                } else if (q.type === "true-false") {
+                  answerDisplay =
+                    q.correctAnswer === "true" || q.correctAnswer === "V"
+                      ? "Verdadeiro (V)"
+                      : "Falso (F)"
+                }
+
+                return `
+                  <tr>
+                    <td style="text-align: center; font-weight: bold;">${idx + 1}</td>
+                    <td>${typeLabels[q.type] || q.type}</td>
+                    <td class="correct-text">${answerDisplay}</td>
+                    <td class="explanation-text">${(q as any).explanation || "Gabarito canônico acadêmico FATEC"}</td>
+                  </tr>
+                `
+              })
+              .join("")}
+          </tbody>
+        </table>
+      </div>
+    `
+    : ""
+
+  const html = `<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+  <meta charset="UTF-8"/>
+  <title>Caderno de Questões — ${discipline.name}</title>
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body {
+      font-family: 'Segoe UI', -apple-system, BlinkMacSystemFont, Roboto, Helvetica, Arial, sans-serif;
+      color: #1e293b;
+      background: #f8fafc;
+      padding: 30px;
+      font-size: 13px;
+      line-height: 1.6;
+    }
+
+    .document-container {
+      max-width: 820px;
+      margin: 0 auto;
+      background: #ffffff;
+      padding: 40px;
+      border-radius: 12px;
+      box-shadow: 0 4px 20px rgba(0,0,0,0.06);
+    }
+
+    .doc-header {
+      border-bottom: 3px solid #0f172a;
+      padding-bottom: 18px;
+      margin-bottom: 24px;
+      display: flex;
+      justify-content: space-between;
+      align-items: flex-start;
+    }
+
+    .inst-badge {
+      font-size: 10px;
+      font-weight: 800;
+      letter-spacing: 1.5px;
+      text-transform: uppercase;
+      color: #d97706;
+      margin-bottom: 4px;
+    }
+
+    .doc-title {
+      font-size: 22px;
+      font-weight: 800;
+      color: #0f172a;
+      font-family: Georgia, serif;
+      margin-bottom: 4px;
+    }
+
+    .doc-subtitle {
+      font-size: 12px;
+      color: #64748b;
+      font-weight: 500;
+    }
+
+    .header-meta {
+      text-align: right;
+      font-size: 11px;
+      color: #64748b;
+      line-height: 1.4;
+    }
+
+    .header-meta strong {
+      color: #0f172a;
+    }
+
+    .header-info-box {
+      background: #f1f5f9;
+      border: 1px solid #e2e8f0;
+      border-radius: 8px;
+      padding: 12px 16px;
+      margin-bottom: 24px;
+      display: grid;
+      grid-template-columns: repeat(3, 1fr);
+      gap: 12px;
+      font-size: 11px;
+    }
+
+    .info-label {
+      font-size: 10px;
+      text-transform: uppercase;
+      font-weight: 700;
+      color: #64748b;
+      display: block;
+      margin-bottom: 2px;
+    }
+
+    .info-val {
+      font-size: 12px;
+      font-weight: 700;
+      color: #0f172a;
+    }
+
+    .question-card {
+      margin-bottom: 20px;
+      padding: 18px;
+      border: 1px solid #e2e8f0;
+      border-radius: 10px;
+      background: #ffffff;
+      page-break-inside: avoid;
+      break-inside: avoid;
+    }
+
+    .question-header {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      margin-bottom: 10px;
+    }
+
+    .question-badge {
+      background: #0f172a;
+      color: #ffffff;
+      font-size: 10px;
+      font-weight: 800;
+      padding: 2px 8px;
+      border-radius: 6px;
+      text-transform: uppercase;
+      letter-spacing: 0.5px;
+    }
+
+    .question-type-badge {
+      background: #e2e8f0;
+      color: #334155;
+      font-size: 10px;
+      font-weight: 700;
+      padding: 2px 8px;
+      border-radius: 6px;
+      text-transform: uppercase;
+    }
+
+    .question-points {
+      margin-left: auto;
+      font-size: 11px;
+      font-weight: 700;
+      color: #64748b;
+    }
+
+    .question-text {
+      font-size: 13px;
+      font-weight: 600;
+      color: #0f172a;
+      margin-bottom: 12px;
+      line-height: 1.6;
+    }
+
+    .choices-container {
+      display: flex;
+      flex-direction: column;
+      gap: 6px;
+    }
+
+    .choice-item {
+      display: flex;
+      align-items: flex-start;
+      gap: 8px;
+      font-size: 12px;
+      color: #334155;
+      padding: 6px 10px;
+      background: #f8fafc;
+      border: 1px solid #edf2f7;
+      border-radius: 6px;
+    }
+
+    .choice-marker {
+      font-weight: 800;
+      color: #0f172a;
+      min-width: 22px;
+    }
+
+    .choice-text {
+      flex: 1;
+    }
+
+    .tf-container {
+      display: flex;
+      gap: 20px;
+      padding: 8px 12px;
+      background: #f8fafc;
+      border-radius: 6px;
+      font-size: 12px;
+    }
+
+    .tf-box {
+      font-family: monospace;
+      font-weight: bold;
+      color: #475569;
+    }
+
+    .matching-container {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 16px;
+      background: #f8fafc;
+      padding: 12px;
+      border-radius: 6px;
+      font-size: 12px;
+    }
+
+    .matching-col-title {
+      font-weight: 800;
+      font-size: 11px;
+      text-transform: uppercase;
+      color: #64748b;
+      margin-bottom: 6px;
+    }
+
+    .matching-item {
+      padding: 4px 0;
+      border-bottom: 1px dashed #e2e8f0;
+    }
+
+    .discursive-lines {
+      margin-top: 8px;
+      display: flex;
+      flex-direction: column;
+      gap: 16px;
+      padding: 8px 0;
+    }
+
+    .discursive-lines .line {
+      border-bottom: 1px solid #cbd5e1;
+      height: 1px;
+      width: 100%;
+    }
+
+    .fill-container {
+      margin-top: 8px;
+      font-size: 12px;
+      color: #64748b;
+    }
+
+    /* ─── Answer Key Styles ─── */
+    .answer-key-section {
+      margin-top: 30px;
+    }
+
+    .page-break {
+      page-break-before: always;
+      break-before: always;
+      height: 1px;
+      margin: 30px 0;
+    }
+
+    .answer-key-header {
+      background: #0f172a;
+      color: #ffffff;
+      padding: 16px 20px;
+      border-radius: 8px 8px 0 0;
+    }
+
+    .answer-key-title {
+      font-size: 14px;
+      font-weight: 800;
+      letter-spacing: 1px;
+      text-transform: uppercase;
+    }
+
+    .answer-key-subtitle {
+      font-size: 11px;
+      opacity: 0.8;
+      margin-top: 2px;
+    }
+
+    .answer-key-table {
+      width: 100%;
+      border-collapse: collapse;
+      font-size: 11px;
+      background: #ffffff;
+      border: 1px solid #cbd5e1;
+      border-top: none;
+    }
+
+    .answer-key-table th {
+      background: #f1f5f9;
+      color: #334155;
+      font-weight: 700;
+      text-transform: uppercase;
+      font-size: 10px;
+      padding: 8px 10px;
+      border: 1px solid #cbd5e1;
+      text-align: left;
+    }
+
+    .answer-key-table td {
+      padding: 8px 10px;
+      border: 1px solid #e2e8f0;
+      vertical-align: top;
+      line-height: 1.4;
+    }
+
+    .answer-key-table tr:nth-child(even) {
+      background: #f8fafc;
+    }
+
+    .correct-text {
+      color: #166534;
+      font-weight: 700;
+    }
+
+    .explanation-text {
+      color: #475569;
+      font-style: italic;
+    }
+
+    .footer-stamp {
+      margin-top: 24px;
+      text-align: center;
+      font-size: 10px;
+      color: #94a3b8;
+      border-top: 1px solid #e2e8f0;
+      padding-top: 12px;
+    }
+
+    @media print {
+      body {
+        background: #ffffff;
+        padding: 0;
+      }
+      .document-container {
+        box-shadow: none;
+        padding: 0;
+        max-width: 100%;
+      }
+      .page-break {
+        display: block;
+        page-break-before: always;
+        break-before: always;
+      }
+    }
+  </style>
+</head>
+<body>
+  <div class="document-container">
+    <!-- Header -->
+    <div class="doc-header">
+      <div>
+        <div class="inst-badge">Faculdade de Teologia e Cultura — FATEC</div>
+        <h1 class="doc-title">${discipline.name}</h1>
+        <div class="doc-subtitle">Caderno Acadêmico de Questões e Avaliações</div>
+      </div>
+      <div class="header-meta">
+        <div><strong>Emissão:</strong> ${issueDate}</div>
+        <div><strong>Total de Itens:</strong> ${questions.length}</div>
+        <div><strong>Autenticação:</strong> FATEC-${discipline.id.substring(0, 6).toUpperCase()}</div>
+      </div>
+    </div>
+
+    <!-- Info Box -->
+    <div class="header-info-box">
+      <div>
+        <span class="info-label">Disciplina</span>
+        <span class="info-val">${discipline.name}</span>
+      </div>
+      <div>
+        <span class="info-label">Semestre / Módulo</span>
+        <span class="info-val">${discipline.semesterName || "Semestre Regular"}</span>
+      </div>
+      <div>
+        <span class="info-label">Professor(a)</span>
+        <span class="info-val">${discipline.professorName || "Coordenação Teológica"}</span>
+      </div>
+    </div>
+
+    <!-- Questões -->
+    <div class="questions-list">
+      ${questionsHTML}
+    </div>
+
+    <!-- Gabarito Oficial -->
+    ${answerKeyHTML}
+
+    <!-- Rodapé -->
+    <div class="footer-stamp">
+      Faculdade de Teologia e Cultura (FATEC) · Sistema de Gestão Acadêmica Integrada · Documento emitido para fins pedagógicos.
+    </div>
+  </div>
+</body>
+</html>`
+
+  openAndPrintHTML(html, 900, 700)
+}
+
+// ─── BOLETIM INDIVIDUAL DO ALUNO ─────────────────────────────────────────────
+
+export interface StudentBoletimData {
+  student: {
+    name: string
+    enrollment_number: string
+    cpf?: string
+    email?: string
+    phone?: string
+    class_name?: string
+    modality?: string
+    status?: string
+    avatar_url?: string | null
+  }
+  grades: StudentGrade[]
+  disciplines: { id: string; name: string; semesterId?: string | null; semesterName?: string; professorName?: string | null }[]
+  semesters: { id: string; name: string; order: number }[]
+  gradeSettings: GradeSettings
+}
+
+export function printStudentBoletimPDF(data: StudentBoletimData): void {
+  const { student, grades, disciplines, semesters, gradeSettings } = data
+  const issueDate = new Date().toLocaleDateString('pt-BR', { day: '2-digit', month: 'long', year: 'numeric' })
+  const issueTime = new Date().toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' })
+
+  // Sort semesters
+  const sortedSemesters = [...semesters].sort((a, b) => a.order - b.order)
+
+  // Calculate global stats
+  const publicGrades = grades.filter(g => g.isPublic)
+  const totalDisciplines = grades.length
+  const approvedCount = publicGrades.filter(g => parseFloat(calculateGlobalAverage(g, gradeSettings)) >= 7.0).length
+  const failedCount = publicGrades.filter(g => parseFloat(calculateGlobalAverage(g, gradeSettings)) < 7.0).length
+  const pendingCount = grades.filter(g => !g.isPublic).length
+
+  const allAvgs = publicGrades.map(g => parseFloat(calculateGlobalAverage(g, gradeSettings))).filter(n => !isNaN(n))
+  const globalAvg = allAvgs.length > 0 ? (allAvgs.reduce((a, b) => a + b, 0) / allAvgs.length) : 0
+
+  const isAllApproved = publicGrades.length > 0 && failedCount === 0 && pendingCount === 0
+  const statusLabel = isAllApproved ? 'APROVADO(A) EM TODAS AS DISCIPLINAS' : failedCount > 0 ? `REPROVADO(A) EM ${failedCount} DISCIPLINA(S)` : 'EM CURSO'
+  const statusColor = isAllApproved ? '#16a34a' : failedCount > 0 ? '#dc2626' : '#d97706'
+  const statusBg = isAllApproved ? '#dcfce7' : failedCount > 0 ? '#fee2e2' : '#fef3c7'
+
+  // Build discipline rows grouped by semester
+  const semesterSections = sortedSemesters.map(sem => {
+    const semGrades = grades.filter(g => {
+      const disc = disciplines.find(d => d.id === g.disciplineId)
+      return disc?.semesterId === sem.id
+    })
+    if (semGrades.length === 0) return ''
+
+    const rows = semGrades.map(g => {
+      const disc = disciplines.find(d => d.id === g.disciplineId)
+      const avgStr = g.isPublic ? calculateGlobalAverage(g, gradeSettings) : null
+      const avg = avgStr ? parseFloat(avgStr) : null
+      const isApproved = avg !== null && avg >= 7.0
+      const barWidth = avg !== null ? Math.min(Math.round((avg / 10) * 100), 100) : 0
+      const barColor = avg === null ? '#94a3b8' : avg >= 7 ? '#16a34a' : avg >= 5 ? '#d97706' : '#dc2626'
+      const rowBg = avg !== null && !isApproved && g.isPublic ? '#fff5f5' : '#fff'
+
+      return `
+        <tr style="background:${rowBg};border-bottom:1px solid #f1f5f9;">
+          <td style="padding:12px 16px;font-size:13px;font-weight:600;color:#1e293b;">${disc?.name || 'Disciplina Geral'}</td>
+          <td style="padding:12px 10px;font-size:12px;text-align:center;color:#64748b;">${disc?.professorName || '—'}</td>
+          <td style="padding:12px 10px;text-align:center;">
+            <span style="display:inline-block;padding:2px 8px;background:#eff6ff;color:#1d4ed8;font-size:11px;font-weight:700;border-radius:4px;">${g.attendanceScore.toFixed(1)}</span>
+          </td>
+          <td style="padding:12px 10px;text-align:center;">
+            <span style="display:inline-block;padding:2px 8px;background:#f8fafc;color:#334155;font-size:11px;font-weight:700;border-radius:4px;">${g.isPublic ? g.examGrade.toFixed(1) : '🔒'}</span>
+          </td>
+          <td style="padding:12px 10px;text-align:center;">
+            ${g.worksGrade > 0 ? `<span style="display:inline-block;padding:2px 8px;background:#f8fafc;color:#334155;font-size:11px;font-weight:700;border-radius:4px;">${g.worksGrade.toFixed(1)}</span>` : '<span style="color:#cbd5e1;font-size:11px;">—</span>'}
+          </td>
+          <td style="padding:12px 10px;min-width:120px;">
+            ${avg !== null ? `
+              <div style="display:flex;align-items:center;gap:8px;">
+                <div style="flex:1;height:6px;background:#e2e8f0;border-radius:3px;overflow:hidden;">
+                  <div style="width:${barWidth}%;height:100%;background:${barColor};border-radius:3px;"></div>
+                </div>
+                <span style="font-size:12px;font-weight:800;color:${barColor};min-width:32px;">${avg.toFixed(1)}</span>
+              </div>
+            ` : '<span style="font-size:11px;color:#94a3b8;font-style:italic;">Aguardando</span>'}
+          </td>
+          <td style="padding:12px 10px;text-align:center;">
+            ${avg !== null
+              ? `<span style="display:inline-flex;align-items:center;gap:4px;padding:3px 10px;border-radius:20px;font-size:10px;font-weight:800;text-transform:uppercase;letter-spacing:.5px;background:${isApproved ? '#dcfce7' : '#fee2e2'};color:${isApproved ? '#166534' : '#991b1b'};">${isApproved ? '✓ Aprovado' : '✗ Reprovado'}</span>`
+              : `<span style="display:inline-flex;padding:3px 10px;border-radius:20px;font-size:10px;font-weight:800;text-transform:uppercase;background:#fef3c7;color:#92400e;">Em Curso</span>`
+            }
+          </td>
+        </tr>
+      `
+    }).join('')
+
+    return `
+      <div style="margin-bottom:24px;">
+        <div style="background:#1e3a5f;color:#fff;padding:8px 16px;font-size:11px;font-weight:800;letter-spacing:1px;text-transform:uppercase;border-radius:6px 6px 0 0;">${sem.name}</div>
+        <table style="width:100%;border-collapse:collapse;background:#fff;border:1px solid #e2e8f0;border-top:none;border-radius:0 0 6px 6px;overflow:hidden;">
+          <thead>
+            <tr style="background:#f8fafc;border-bottom:2px solid #e2e8f0;">
+              <th style="padding:10px 16px;text-align:left;font-size:10px;font-weight:700;color:#64748b;text-transform:uppercase;letter-spacing:.5px;">Disciplina</th>
+              <th style="padding:10px;text-align:center;font-size:10px;font-weight:700;color:#64748b;text-transform:uppercase;letter-spacing:.5px;">Professor(a)</th>
+              <th style="padding:10px;text-align:center;font-size:10px;font-weight:700;color:#1d4ed8;text-transform:uppercase;letter-spacing:.5px;">Presença</th>
+              <th style="padding:10px;text-align:center;font-size:10px;font-weight:700;color:#64748b;text-transform:uppercase;letter-spacing:.5px;">Prova</th>
+              <th style="padding:10px;text-align:center;font-size:10px;font-weight:700;color:#64748b;text-transform:uppercase;letter-spacing:.5px;">Trabalhos</th>
+              <th style="padding:10px;text-align:center;font-size:10px;font-weight:700;color:#64748b;text-transform:uppercase;letter-spacing:.5px;">Média Final</th>
+              <th style="padding:10px;text-align:center;font-size:10px;font-weight:700;color:#64748b;text-transform:uppercase;letter-spacing:.5px;">Situação</th>
+            </tr>
+          </thead>
+          <tbody>${rows}</tbody>
+        </table>
+      </div>
+    `
+  }).join('')
+
+  // Disciplines without a semester
+  const unsortedGrades = grades.filter(g => {
+    const disc = disciplines.find(d => d.id === g.disciplineId)
+    return !disc?.semesterId || !semesters.find(s => s.id === disc.semesterId)
+  })
+  const unsortedRows = unsortedGrades.map(g => {
+    const disc = disciplines.find(d => d.id === g.disciplineId)
+    const avgStr = g.isPublic ? calculateGlobalAverage(g, gradeSettings) : null
+    const avg = avgStr ? parseFloat(avgStr) : null
+    const isApproved = avg !== null && avg >= 7.0
+    const barWidth = avg !== null ? Math.min(Math.round((avg / 10) * 100), 100) : 0
+    const barColor = avg === null ? '#94a3b8' : avg >= 7 ? '#16a34a' : avg >= 5 ? '#d97706' : '#dc2626'
+    const rowBg = avg !== null && !isApproved && g.isPublic ? '#fff5f5' : '#fff'
+
+    return `
+      <tr style="background:${rowBg};border-bottom:1px solid #f1f5f9;">
+        <td style="padding:12px 16px;font-size:13px;font-weight:600;color:#1e293b;">${disc?.name || 'Disciplina Geral'}</td>
+        <td style="padding:12px 10px;font-size:12px;text-align:center;color:#64748b;">${disc?.professorName || '—'}</td>
+        <td style="padding:12px 10px;text-align:center;"><span style="font-size:11px;font-weight:700;">${g.attendanceScore.toFixed(1)}</span></td>
+        <td style="padding:12px 10px;text-align:center;"><span style="font-size:11px;font-weight:700;">${g.isPublic ? g.examGrade.toFixed(1) : '🔒'}</span></td>
+        <td style="padding:12px 10px;text-align:center;">${g.worksGrade > 0 ? g.worksGrade.toFixed(1) : '—'}</td>
+        <td style="padding:12px 10px;min-width:120px;">
+          ${avg !== null ? `
+            <div style="display:flex;align-items:center;gap:8px;">
+              <div style="flex:1;height:6px;background:#e2e8f0;border-radius:3px;overflow:hidden;">
+                <div style="width:${barWidth}%;height:100%;background:${barColor};border-radius:3px;"></div>
+              </div>
+              <span style="font-size:12px;font-weight:800;color:${barColor};min-width:32px;">${avg.toFixed(1)}</span>
+            </div>
+          ` : '<span style="font-size:11px;color:#94a3b8;font-style:italic;">Aguardando</span>'}
+        </td>
+        <td style="padding:12px 10px;text-align:center;">
+          ${avg !== null
+            ? `<span style="padding:3px 10px;border-radius:20px;font-size:10px;font-weight:800;background:${isApproved ? '#dcfce7' : '#fee2e2'};color:${isApproved ? '#166534' : '#991b1b'};">${isApproved ? '✓ Aprovado' : '✗ Reprovado'}</span>`
+            : `<span style="padding:3px 10px;border-radius:20px;font-size:10px;font-weight:800;background:#fef3c7;color:#92400e;">Em Curso</span>`
+          }
+        </td>
+      </tr>
+    `
+  }).join('')
+
+  const unsortedSection = unsortedGrades.length > 0 ? `
+    <div style="margin-bottom:24px;">
+      <div style="background:#475569;color:#fff;padding:8px 16px;font-size:11px;font-weight:800;letter-spacing:1px;text-transform:uppercase;border-radius:6px 6px 0 0;">Outras Disciplinas</div>
+      <table style="width:100%;border-collapse:collapse;background:#fff;border:1px solid #e2e8f0;border-top:none;border-radius:0 0 6px 6px;overflow:hidden;">
+        <thead>
+          <tr style="background:#f8fafc;border-bottom:2px solid #e2e8f0;">
+            <th style="padding:10px 16px;text-align:left;font-size:10px;font-weight:700;color:#64748b;text-transform:uppercase;">Disciplina</th>
+            <th style="padding:10px;text-align:center;font-size:10px;font-weight:700;color:#64748b;text-transform:uppercase;">Professor(a)</th>
+            <th style="padding:10px;text-align:center;font-size:10px;font-weight:700;color:#1d4ed8;text-transform:uppercase;">Presença</th>
+            <th style="padding:10px;text-align:center;font-size:10px;font-weight:700;color:#64748b;text-transform:uppercase;">Prova</th>
+            <th style="padding:10px;text-align:center;font-size:10px;font-weight:700;color:#64748b;text-transform:uppercase;">Trabalhos</th>
+            <th style="padding:10px;text-align:center;font-size:10px;font-weight:700;color:#64748b;text-transform:uppercase;">Média Final</th>
+            <th style="padding:10px;text-align:center;font-size:10px;font-weight:700;color:#64748b;text-transform:uppercase;">Situação</th>
+          </tr>
+        </thead>
+        <tbody>${unsortedRows}</tbody>
+      </table>
+    </div>
+  ` : ''
+
+  const html = `<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+  <meta charset="UTF-8"/>
+  <title>Boletim Acadêmico — ${student.name}</title>
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body { font-family: 'Segoe UI', Arial, sans-serif; color: #1e293b; background: #f1f5f9; }
+    @media print {
+      body { background: #fff; padding: 0; }
+      .no-print { display: none; }
+      .page-container { box-shadow: none; margin: 0; border-radius: 0; }
+    }
+  </style>
+</head>
+<body>
+  <div style="max-width:900px;margin:0 auto;background:#fff;border-radius:16px;overflow:hidden;box-shadow:0 20px 60px rgba(0,0,0,.12);">
+
+    <!-- ── HEADER INSTITUCIONAL ── -->
+    <div style="background:linear-gradient(135deg,#0f172a 0%,#1e3a5f 60%,#1e4080 100%);padding:40px 48px;position:relative;overflow:hidden;">
+      <div style="position:absolute;top:-40px;right:-40px;width:200px;height:200px;border-radius:50%;background:rgba(180,83,9,.15);"></div>
+      <div style="position:absolute;bottom:-60px;left:60px;width:160px;height:160px;border-radius:50%;background:rgba(255,255,255,.04);"></div>
+
+      <div style="display:flex;justify-content:space-between;align-items:flex-start;position:relative;z-index:1;">
+        <div>
+          <div style="font-size:10px;font-weight:800;color:#f97316;letter-spacing:3px;text-transform:uppercase;margin-bottom:8px;">Faculdade de Teologia e Cultura</div>
+          <h1 style="font-size:32px;font-weight:900;color:#fff;letter-spacing:-0.5px;line-height:1.1;margin-bottom:4px;">BOLETIM ACADÊMICO</h1>
+          <div style="font-size:13px;color:rgba(255,255,255,.6);font-weight:500;">Declaração Oficial de Desempenho Escolar</div>
+        </div>
+        <div style="text-align:right;color:rgba(255,255,255,.7);font-size:11px;">
+          <div>Emitido em</div>
+          <div style="font-size:14px;font-weight:700;color:#fff;">${issueDate}</div>
+          <div style="margin-top:2px;">${issueTime}</div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ── DADOS DO ALUNO ── -->
+    <div style="background:#f8fafc;border-bottom:1px solid #e2e8f0;padding:28px 48px;">
+      <div style="display:flex;align-items:center;gap:24px;">
+        ${student.avatar_url
+          ? `<img src="${student.avatar_url}" style="width:72px;height:72px;border-radius:50%;object-fit:cover;border:3px solid #e2e8f0;flex-shrink:0;" alt="${student.name}" onerror="this.style.display='none'" />`
+          : `<div style="width:72px;height:72px;border-radius:50%;background:linear-gradient(135deg,#1e3a5f,#2563eb);display:flex;align-items:center;justify-content:center;flex-shrink:0;">
+              <span style="font-size:28px;font-weight:900;color:#fff;">${student.name.charAt(0).toUpperCase()}</span>
+            </div>`
+        }
+        <div style="flex:1;">
+          <h2 style="font-size:22px;font-weight:800;color:#0f172a;margin-bottom:6px;">${student.name}</h2>
+          <div style="display:flex;flex-wrap:wrap;gap:16px;">
+            <div style="font-size:12px;color:#64748b;"><span style="font-weight:700;color:#334155;">Matrícula:</span> ${student.enrollment_number}</div>
+            ${student.cpf ? `<div style="font-size:12px;color:#64748b;"><span style="font-weight:700;color:#334155;">CPF:</span> ${student.cpf}</div>` : ''}
+            ${student.class_name ? `<div style="font-size:12px;color:#64748b;"><span style="font-weight:700;color:#334155;">Turma:</span> ${student.class_name}</div>` : ''}
+            ${student.modality ? `<div style="font-size:12px;color:#64748b;"><span style="font-weight:700;color:#334155;">Modalidade:</span> ${student.modality}</div>` : ''}
+          </div>
+        </div>
+        <div style="text-align:center;padding:16px 24px;border-radius:12px;background:${statusBg};border:2px solid ${statusColor}20;min-width:180px;">
+          <div style="font-size:10px;font-weight:700;color:${statusColor};text-transform:uppercase;letter-spacing:1px;margin-bottom:4px;">Situação Geral</div>
+          <div style="font-size:12px;font-weight:900;color:${statusColor};line-height:1.2;">${statusLabel}</div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ── KPIs ── -->
+    <div style="display:grid;grid-template-columns:repeat(4,1fr);gap:0;border-bottom:1px solid #e2e8f0;">
+      ${[
+        { label: 'Total de Disciplinas', value: totalDisciplines, color: '#1e3a5f', sub: 'registradas' },
+        { label: 'Aprovadas', value: approvedCount, color: '#16a34a', sub: 'com média ≥ 7.0' },
+        { label: 'Reprovadas', value: failedCount, color: '#dc2626', sub: 'com média < 7.0' },
+        { label: 'Média Geral', value: allAvgs.length > 0 ? globalAvg.toFixed(2) : '—', color: globalAvg >= 7 ? '#16a34a' : globalAvg >= 5 ? '#d97706' : '#dc2626', sub: 'das disciplinas liberadas' },
+      ].map((kpi, i) => `
+        <div style="padding:20px 24px;text-align:center;${i < 3 ? 'border-right:1px solid #e2e8f0;' : ''}">
+          <div style="font-size:28px;font-weight:900;color:${kpi.color};">${kpi.value}</div>
+          <div style="font-size:11px;font-weight:700;color:#334155;text-transform:uppercase;letter-spacing:.5px;margin-top:4px;">${kpi.label}</div>
+          <div style="font-size:10px;color:#94a3b8;margin-top:2px;">${kpi.sub}</div>
+        </div>
+      `).join('')}
+    </div>
+
+    <!-- ── TABELA DE NOTAS ── -->
+    <div style="padding:32px 48px;">
+      <h3 style="font-size:16px;font-weight:800;color:#0f172a;margin-bottom:20px;display:flex;align-items:center;gap:8px;">
+        <span style="display:inline-block;width:4px;height:20px;background:#1e3a5f;border-radius:2px;"></span>
+        Histórico de Notas por Disciplina
+      </h3>
+      ${semesterSections}
+      ${unsortedSection}
+      ${grades.length === 0 ? '<p style="text-align:center;color:#94a3b8;font-style:italic;padding:40px;">Nenhuma nota lançada para este aluno.</p>' : ''}
+    </div>
+
+    <!-- ── OBSERVAÇÕES / LEGENDA ── -->
+    <div style="margin:0 48px;padding:16px 20px;background:#f8fafc;border:1px solid #e2e8f0;border-radius:10px;margin-bottom:32px;">
+      <div style="font-size:10px;font-weight:800;color:#64748b;text-transform:uppercase;letter-spacing:1px;margin-bottom:8px;">Legenda e Critérios de Avaliação</div>
+      <div style="display:flex;flex-wrap:wrap;gap:16px;font-size:11px;color:#475569;">
+        <div><strong>Presença:</strong> Cada presença registrada = 2,5 pts</div>
+        <div><strong>Aprovação:</strong> Média Final ≥ 7,0</div>
+        <div><strong>🔒 Prova bloqueada:</strong> Aguardando liberação pelo professor</div>
+        <div><strong>Fórmula:</strong> ${gradeSettings.divisor > 1 ? `Soma das notas ÷ ${gradeSettings.divisor}` : 'Ponderação por pesos configurados'}</div>
+      </div>
+    </div>
+
+    <!-- ── ASSINATURA / RODAPÉ ── -->
+    <div style="background:#f8fafc;border-top:2px solid #e2e8f0;padding:32px 48px;">
+      <div style="display:flex;justify-content:space-between;align-items:flex-end;gap:40px;">
+        <div style="text-align:center;flex:1;">
+          <div style="border-top:1px solid #334155;padding-top:10px;font-size:11px;color:#64748b;">Secretaria Acadêmica</div>
+          <div style="font-size:10px;color:#94a3b8;margin-top:2px;">Faculdade de Teologia e Cultura — FATEC</div>
+        </div>
+        <div style="text-align:center;flex:1;">
+          <div style="border-top:1px solid #334155;padding-top:10px;font-size:11px;color:#64748b;">Coordenação Pedagógica</div>
+          <div style="font-size:10px;color:#94a3b8;margin-top:2px;">Homologado pelo Sistema</div>
+        </div>
+        <div style="text-align:center;flex:1;">
+          <div style="border-top:1px solid #334155;padding-top:10px;font-size:11px;color:#64748b;">${student.name}</div>
+          <div style="font-size:10px;color:#94a3b8;margin-top:2px;">Aluno(a) — Ciente do Boletim</div>
+        </div>
+      </div>
+      <div style="text-align:center;margin-top:24px;font-size:10px;color:#94a3b8;border-top:1px solid #e2e8f0;padding-top:16px;">
+        Documento gerado pelo Sistema de Gestão Acadêmica FATEC · ${issueDate} · Matrícula: ${student.enrollment_number}
+        <br/>Este documento tem validade oficial somente quando acompanhado de carimbo e assinatura da secretaria.
+      </div>
+    </div>
+  </div>
+</body>
+</html>`
+
+  openAndPrintHTML(html, 960, 820)
+}

@@ -1,0 +1,1003 @@
+"use client"
+
+import { useState, useEffect } from "react"
+import { X, ChevronRight, ChevronLeft, User, Phone, MapPin, Church, BookOpen, CreditCard, QrCode, Loader2, CheckCircle2, AlertCircle, Copy, MessageCircle, Clock, GraduationCap, ArrowRight, Mail, Calendar } from "lucide-react"
+import { getClasses, getFinancialSettings, getClassSchedules, type ClassRoom, type FinancialSettings, type ClassSchedule, POLOS } from "@/lib/store"
+import { usePolo } from "@/lib/polo-context"
+import {
+    AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent,
+    AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle,
+} from "@/components/ui/alert-dialog"
+import {
+    Dialog,
+    DialogContent,
+    DialogHeader,
+    DialogTitle,
+    DialogDescription,
+    DialogFooter
+} from "@/components/ui/dialog"
+
+interface EnrollmentFormProps {
+    onClose: () => void
+    onSuccess?: () => void
+}
+
+type Step = "personal" | "class" | "payment"
+type PayMethod = "pix" | "card" | null
+
+interface FormData {
+    name: string
+    email: string
+    cpf: string
+    birthDate: string
+    phone: string
+    cep: string
+    address: string
+    church: string
+    pastor: string
+    classId: string
+}
+
+const EMPTY_FORM: FormData = {
+    name: "",
+    email: "",
+    cpf: "",
+    birthDate: "",
+    phone: "",
+    cep: "",
+    address: "",
+    church: "",
+    pastor: "",
+    classId: ""
+}
+
+function formatCPF(v: string) {
+    return v.replace(/\D/g, "").replace(/(\d{3})(\d)/, "$1.$2").replace(/(\d{3})(\d)/, "$1.$2").replace(/(\d{3})(\d{1,2})$/, "$1-$2").slice(0, 14)
+}
+function formatPhone(v: string) {
+    return v.replace(/\D/g, "").replace(/(\d{2})(\d)/, "($1) $2").replace(/(\d{5})(\d)/, "$1-$2").slice(0, 15)
+}
+
+export function EnrollmentForm({ onClose, onSuccess }: EnrollmentFormProps) {
+    const { polo } = usePolo()
+    const [step, setStep] = useState<Step>("personal")
+    const [form, setForm] = useState<FormData>(EMPTY_FORM)
+    const [classes, setClasses] = useState<ClassRoom[]>([])
+    const [schedules, setSchedules] = useState<ClassSchedule[]>([])
+    const [settings, setSettings] = useState<FinancialSettings | null>(null)
+
+    const [payMethod, setPayMethod] = useState<PayMethod>(null)
+    const [loading, setLoading] = useState(true)
+    const [loadingCep, setLoadingCep] = useState(false)
+
+    // Pix state
+    const [pixCopied, setPixCopied] = useState(false)
+    const [enrollmentDetails, setEnrollmentDetails] = useState<{ enrollmentNumber: string, name: string } | null>(null)
+    const [enrolledChargeId, setEnrolledChargeId] = useState<string | null>(null)
+    const [dynamicPix, setDynamicPix] = useState<{ qrcode?: string; copyPaste?: string } | null>(null)
+
+    // Success
+    const [success, setSuccess] = useState(false)
+    const [enrollError, setEnrollError] = useState("")
+    const [creating, setCreating] = useState(false)
+    const [exitConfirmOpen, setExitConfirmOpen] = useState(false)
+    const [isPaidLater, setIsPaidLater] = useState(false)
+    const [selectedModality, setSelectedModality] = useState<"presencial" | "semi_presencial" | "online" | "">("")
+    const [selectedPoloId, setSelectedPoloId] = useState<string>(polo?.id || "polo-tancredo-neves")
+    const [showConfirmModal, setShowConfirmModal] = useState(false)
+
+    async function handleCepChange(val: string) {
+        const masked = val.replace(/\D/g, '').replace(/(\d{5})(\d)/, '$1-$2').slice(0, 9)
+        setForm(f => ({ ...f, cep: masked }))
+
+        const clean = val.replace(/\D/g, '')
+        if (clean.length === 8) {
+            setLoadingCep(true)
+            try {
+                const res = await fetch(`https://viacep.com.br/ws/${clean}/json/`)
+                const data = await res.json()
+                if (!data.erro) {
+                    const addressParts = [
+                        data.logradouro,
+                        data.bairro,
+                        `${data.localidade} - ${data.uf}`
+                    ].filter(Boolean).join(", ")
+                    
+                    setForm(f => ({
+                        ...f,
+                        address: addressParts
+                    }))
+                }
+            } catch (err) {
+                console.error("Erro ao buscar CEP:", err)
+            } finally {
+                setLoadingCep(false)
+            }
+        }
+    }
+
+    const selectedClass = classes.find(c => c.id === form.classId)
+
+    function getModalidadeLabel(c?: ClassRoom) {
+        if (!c) return "Online / EAD"
+        if (c.modality === "presencial") return "Presencial"
+        if (c.modality === "semi_presencial") return "Semipresencial"
+        if (c.modality === "online") return "100% Online (EAD)"
+        if (c.name.toLowerCase().includes("online") || c.shift === "ead") return "100% Online (EAD)"
+        if (c.name.toLowerCase().includes("semi")) return "Semipresencial"
+        return "Presencial"
+    }
+
+    function getPoloLabel(c?: ClassRoom) {
+        if (!c) return "Geral (EAD / Online)"
+        if (c.poloId) {
+            const p = POLOS.find(p => p.id === c.poloId)
+            if (p) return `${p.name} (${p.city})`
+            if (c.poloId === 'polo-chapada') return "Polo Chapada (Chapada Diamantina - BA)"
+            if (c.poloId === 'polo-tancredo-neves') return "Polo Salvador (Salvador - BA)"
+        }
+        if (c.modality === 'online' || c.shift === 'ead' || c.name.toLowerCase().includes('online')) {
+            return "EAD / Online (Acesso Global)"
+        }
+        return "Polo Salvador (Sede)"
+    }
+
+    function getScheduleLabel(c?: ClassRoom) {
+        if (!c) return "Aulas gravadas / flexível"
+        const day = c.dayOfWeek ? ({
+            monday: "Segunda", tuesday: "Terça", wednesday: "Quarta",
+            thursday: "Quinta", friday: "Sexta", saturday: "Sábado"
+        }[c.dayOfWeek] || c.dayOfWeek) : (c.shift === 'ead' ? 'Online / Flexível' : 'Dia a definir')
+        const shift = ({ morning: "Manhã", afternoon: "Tarde", evening: "Noite", ead: "EAD/Online" }[c.shift] || c.shift)
+        return `${day} • Turno: ${shift}`
+    }
+
+    useEffect(() => {
+        async function load() {
+            const [cls, fin, scheds] = await Promise.all([
+                getClasses('all'), getFinancialSettings(), getClassSchedules('all')
+            ])
+            setClasses(cls)
+            setSchedules(scheds)
+            setSettings(fin)
+            setLoading(false)
+        }
+        load()
+    }, [])
+
+    const isPersonalValid = form.name.trim() && form.email.trim().includes('@') && form.cpf.replace(/\D/g, '').length === 11 && form.birthDate.trim() && form.phone.trim().length >= 14 && form.address.trim() && form.church.trim() && form.pastor.trim()
+    const isClassValid = !!form.classId
+
+    async function handleCreateEnrollment() {
+        if (creating) return
+        setCreating(true)
+        try {
+            const isOnline = selectedModality === "online"
+            const currentEnrollmentFee = isOnline 
+                ? (settings?.enrollmentFeeOnline ?? settings?.enrollmentFee ?? 60) 
+                : (settings?.enrollmentFee ?? 60)
+
+            const finalPoloId = selectedPoloId || polo?.id || "polo-tancredo-neves"
+
+            const res = await fetch("/api/enrollment/create", {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({ ...form, amount: currentEnrollmentFee, poloId: finalPoloId, modality: selectedModality || "presencial" })
+            })
+            const body = await res.json()
+            if (!res.ok) throw new Error(body.error || "Erro ao criar matrícula")
+            setEnrollmentDetails({ enrollmentNumber: body.enrollmentNumber, name: form.name })
+            setEnrolledChargeId(body.chargeId)
+
+            // Try to generate Asaas PIX immediately for the newly created charge
+            try {
+                const asaasRes = await fetch("/api/asaas/create-pix", {
+                    method: "POST",
+                    headers: { "Content-Type": "application/json" },
+                    body: JSON.stringify({ chargeIds: [body.chargeId] })
+                })
+                if (asaasRes.ok) {
+                    const asaasData = await asaasRes.json()
+                    if (asaasData.pixQrcode) {
+                        setDynamicPix({ qrcode: asaasData.pixQrcode, copyPaste: asaasData.pixCopyPaste })
+                    }
+                }
+            } catch (e) {
+                // Silently fallback to static PIX if Asaas fails during enrollment
+                console.error("Asaas PIX generation failed:", e)
+            }
+
+            return body
+        } catch (e: any) {
+            setEnrollError(e.message)
+            throw e
+        } finally {
+            setCreating(false)
+        }
+    }
+
+    const institutionPixKey = "SEU_PIX_AQUI" // This should ideally come from a global setting
+
+    function handleWhatsAppConfirm() {
+        const message = `Olá! Acabei de realizar minha matrícula na FATEC.\n\n*Dados:* \nNome: ${form.name}\nCPF: ${form.cpf}\nMatrícula: ${enrollmentDetails?.enrollmentNumber}\n\n*Estou enviando o comprovante de pagamento em anexo.*`
+        const encoded = encodeURIComponent(message)
+        window.open(`https://wa.me/5571987483103?text=${encoded}`, "_blank") // Updated to final contact
+    }
+
+    async function handleCardPay() {
+        if (!enrolledChargeId) {
+            await handleCreateEnrollment()
+        }
+        if (settings?.creditCardUrl) {
+            window.open(settings.creditCardUrl, "_blank")
+        } else {
+            alert("Link de pagamento não configurado. Entre em contato com a secretaria.")
+        }
+    }
+
+    async function handlePayLater() {
+        if (creating) return
+        try {
+            await handleCreateEnrollment()
+            setIsPaidLater(true)
+            setSuccess(true)
+        } catch (e) {
+            // Error already handled in handleCreateEnrollment
+        }
+    }
+
+    function handleAttemptClose() {
+        if (success) {
+            onClose()
+        } else {
+            setExitConfirmOpen(true)
+        }
+    }
+
+    if (success) {
+        const selectedClass = classes.find(c => c.id === form.classId)
+        let whatsappGroupLink = ""
+        const classNameStr = (selectedClass?.name || "").toLowerCase()
+        if (classNameStr.includes("alpha")) {
+            whatsappGroupLink = "https://chat.whatsapp.com/IuAPUAYZpurBIPisnxgVug"
+        } else if (classNameStr.includes("beta")) {
+            whatsappGroupLink = "https://chat.whatsapp.com/IHOwW3beRo4CDdxegzJsQs"
+        } else if (classNameStr.includes("omega") || classNameStr.includes("ômega")) {
+            whatsappGroupLink = "https://chat.whatsapp.com/JJU7yF8vmqH9l42LVHl3GA"
+        }
+
+        return (
+            <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/60 backdrop-blur-sm">
+                <div className="bg-card rounded-2xl shadow-2xl w-full max-w-md p-8 text-center flex flex-col items-center">
+                    <div className="flex justify-center mb-6">
+                        <div className="h-20 w-20 rounded-full bg-green-50 flex items-center justify-center border border-green-100 shadow-sm">
+                            <CheckCircle2 className="h-10 w-10 text-green-600" />
+                        </div>
+                    </div>
+                    <h2 className="text-3xl font-serif font-bold text-foreground mb-2">
+                        {isPaidLater ? "Pré-Matrícula Realizada!" : "Matrícula Confirmada!"}
+                    </h2>
+                    <p className="text-muted-foreground mb-8">
+                        {isPaidLater 
+                            ? "Sua pré-matrícula foi registrada. Lembre-se: ela só será efetivada após a comprovação do pagamento em até 5 dias." 
+                            : "Sua matrícula foi concluída com sucesso. Assim que o pagamento for confirmado, você receberá seus dados de acesso."}
+                    </p>
+
+                    <div className="w-full bg-muted/40 border border-border rounded-2xl p-6 text-left mb-8 shadow-sm">
+                        <p className="text-xs font-bold text-muted-foreground uppercase tracking-widest mb-4">Número de Pré-Matrícula</p>
+
+                        <div className="space-y-4">
+                            <div>
+                                <div className="flex items-center justify-between bg-background border border-border rounded-lg p-3">
+                                    <span className="font-mono text-xl font-bold tracking-widest text-primary">{enrollmentDetails?.enrollmentNumber}</span>
+                                    <button
+                                        onClick={() => {
+                                            if (enrollmentDetails?.enrollmentNumber) {
+                                                navigator.clipboard.writeText(enrollmentDetails.enrollmentNumber);
+                                            }
+                                        }}
+                                        className="text-xs flex items-center gap-1.5 bg-accent/10 hover:bg-accent/20 text-accent font-semibold px-2 py-1.5 rounded-md transition-colors"
+                                    >
+                                        <Copy className="h-3.5 w-3.5" /> Copiar
+                                    </button>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+
+                    {whatsappGroupLink && (
+                        <a 
+                            href={whatsappGroupLink}
+                            target="_blank"
+                            rel="noopener noreferrer"
+                            className="w-full flex items-center justify-center gap-2 bg-[#25D366] text-white font-bold py-3.5 rounded-xl hover:bg-[#20bd5a] transition-colors shadow-md mb-3"
+                        >
+                            <MessageCircle className="h-5 w-5" />
+                            Entrar no grupo de WhatsApp {selectedClass?.name}
+                        </a>
+                    )}
+
+                    <button onClick={() => { onSuccess?.(); onClose() }} className="w-full bg-accent text-accent-foreground font-bold py-3.5 rounded-xl hover:bg-accent/90 transition-colors shadow-md">
+                        Fechar
+                    </button>
+                </div>
+            </div>
+        )
+    }
+
+    return (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/60 backdrop-blur-sm">
+            <div className="bg-card rounded-2xl shadow-2xl w-full max-w-lg max-h-[95vh] overflow-hidden flex flex-col">
+                {/* Header */}
+                <div className="flex items-center justify-between px-6 py-4 border-b border-border bg-primary text-primary-foreground rounded-t-2xl shrink-0">
+                    <div>
+                        <h2 className="font-bold text-lg">Faça sua Matrícula</h2>
+                        <p className="text-xs text-primary-foreground/70">FATEC — Faculdade de Teologia e Cultura</p>
+                    </div>
+                    <button onClick={handleAttemptClose} className="rounded-full p-1.5 hover:bg-white/10 transition-colors">
+                        <X className="h-5 w-5" />
+                    </button>
+                </div>
+
+                {/* Step Indicator */}
+                <div className="flex px-6 py-3 gap-2 border-b border-border shrink-0">
+                    {(["personal", "class", "payment"] as Step[]).map((s, i) => (
+                        <div key={s} className="flex items-center gap-2">
+                            <div className={`h-6 w-6 rounded-full flex items-center justify-center text-xs font-bold ${step === s ? "bg-accent text-accent-foreground" : i < ["personal", "class", "payment"].indexOf(step) ? "bg-green-500 text-white" : "bg-muted text-muted-foreground"}`}>{i + 1}</div>
+                            <span className={`text-xs hidden sm:block ${step === s ? "font-semibold text-foreground" : "text-muted-foreground"}`}>{["Dados Pessoais", "Turma", "Pagamento"][i]}</span>
+                            {i < 2 && <ChevronRight className="h-3 w-3 text-muted-foreground" />}
+                        </div>
+                    ))}
+                </div>
+
+                <div className="overflow-y-auto flex-1 p-6">
+                    {loading ? (
+                        <div className="flex justify-center py-12"><Loader2 className="h-8 w-8 text-accent animate-spin" /></div>
+                    ) : step === "personal" ? (
+                        <div className="space-y-3.5">
+                            <h3 className="font-semibold text-foreground flex items-center gap-2"><User className="h-4 w-4 text-accent" /> Dados Pessoais</h3>
+
+                            {/* Nome Completo */}
+                            <div>
+                                <label className="text-xs font-semibold text-muted-foreground block mb-1">Nome Completo *</label>
+                                <div className="relative">
+                                    <User className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
+                                    <input
+                                        type="text"
+                                        className="w-full border border-input rounded-xl pl-9 pr-3 py-2 text-sm bg-background focus:outline-none focus:ring-2 focus:ring-accent"
+                                        placeholder="Seu nome completo"
+                                        value={form.name}
+                                        onChange={e => setForm(f => ({ ...f, name: e.target.value }))}
+                                    />
+                                </div>
+                            </div>
+
+                            {/* E-mail */}
+                            <div>
+                                <label className="text-xs font-semibold text-muted-foreground block mb-1">E-mail *</label>
+                                <div className="relative">
+                                    <Mail className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
+                                    <input
+                                        type="email"
+                                        className="w-full border border-input rounded-xl pl-9 pr-3 py-2 text-sm bg-background focus:outline-none focus:ring-2 focus:ring-accent"
+                                        placeholder="seuemail@exemplo.com"
+                                        value={form.email}
+                                        onChange={e => setForm(f => ({ ...f, email: e.target.value }))}
+                                    />
+                                </div>
+                            </div>
+
+                            {/* CPF e Data de Nascimento */}
+                            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                                <div>
+                                    <label className="text-xs font-semibold text-muted-foreground block mb-1">CPF *</label>
+                                    <div className="relative">
+                                        <User className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
+                                        <input
+                                            type="text"
+                                            className="w-full border border-input rounded-xl pl-9 pr-3 py-2 text-sm bg-background focus:outline-none focus:ring-2 focus:ring-accent"
+                                            placeholder="000.000.000-00"
+                                            value={form.cpf}
+                                            onChange={e => setForm(f => ({ ...f, cpf: formatCPF(e.target.value) }))}
+                                        />
+                                    </div>
+                                </div>
+                                <div>
+                                    <label className="text-xs font-semibold text-muted-foreground block mb-1">Data de Nascimento *</label>
+                                    <div className="relative">
+                                        <Calendar className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
+                                        <input
+                                            type="date"
+                                            className="w-full border border-input rounded-xl pl-9 pr-3 py-2 text-sm bg-background focus:outline-none focus:ring-2 focus:ring-accent"
+                                            value={form.birthDate}
+                                            onChange={e => setForm(f => ({ ...f, birthDate: e.target.value }))}
+                                        />
+                                    </div>
+                                </div>
+                            </div>
+
+                            {/* Telefone/WhatsApp e CEP */}
+                            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                                <div>
+                                    <label className="text-xs font-semibold text-muted-foreground block mb-1">Telefone/WhatsApp *</label>
+                                    <div className="relative">
+                                        <Phone className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
+                                        <input
+                                            type="tel"
+                                            className="w-full border border-input rounded-xl pl-9 pr-3 py-2 text-sm bg-background focus:outline-none focus:ring-2 focus:ring-accent"
+                                            placeholder="(00) 00000-0000"
+                                            value={form.phone}
+                                            onChange={e => setForm(f => ({ ...f, phone: formatPhone(e.target.value) }))}
+                                        />
+                                    </div>
+                                </div>
+                                <div>
+                                    <label className="text-xs font-semibold text-muted-foreground block mb-1">CEP *</label>
+                                    <div className="relative">
+                                        <MapPin className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
+                                        <input
+                                            type="text"
+                                            className="w-full border border-input rounded-xl pl-9 pr-8 py-2 text-sm bg-background focus:outline-none focus:ring-2 focus:ring-accent"
+                                            placeholder="00000-000"
+                                            value={form.cep}
+                                            onChange={e => handleCepChange(e.target.value)}
+                                        />
+                                        {loadingCep && (
+                                            <Loader2 className="absolute right-2.5 top-1/2 -translate-y-1/2 h-4 w-4 text-accent animate-spin" />
+                                        )}
+                                    </div>
+                                </div>
+                            </div>
+
+                            {/* Endereço Residencial */}
+                            <div>
+                                <label className="text-xs font-semibold text-muted-foreground block mb-1">Endereço Residencial (Rua, Número, Bairro) *</label>
+                                <div className="relative">
+                                    <MapPin className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
+                                    <input
+                                        type="text"
+                                        className="w-full border border-input rounded-xl pl-9 pr-3 py-2 text-sm bg-background focus:outline-none focus:ring-2 focus:ring-accent"
+                                        placeholder="Ex: Av. Principal, 123, Centro - Salvador/BA"
+                                        value={form.address}
+                                        onChange={e => setForm(f => ({ ...f, address: e.target.value }))}
+                                    />
+                                </div>
+                            </div>
+
+                            {/* Igreja e Pastor */}
+                            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                                <div>
+                                    <label className="text-xs font-semibold text-muted-foreground block mb-1">Nome da Igreja *</label>
+                                    <div className="relative">
+                                        <Church className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
+                                        <input
+                                            type="text"
+                                            className="w-full border border-input rounded-xl pl-9 pr-3 py-2 text-sm bg-background focus:outline-none focus:ring-2 focus:ring-accent"
+                                            placeholder="Sua congregação"
+                                            value={form.church}
+                                            onChange={e => setForm(f => ({ ...f, church: e.target.value }))}
+                                        />
+                                    </div>
+                                </div>
+                                <div>
+                                    <label className="text-xs font-semibold text-muted-foreground block mb-1">Nome do Pastor *</label>
+                                    <div className="relative">
+                                        <User className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
+                                        <input
+                                            type="text"
+                                            className="w-full border border-input rounded-xl pl-9 pr-3 py-2 text-sm bg-background focus:outline-none focus:ring-2 focus:ring-accent"
+                                            placeholder="Pastor responsável"
+                                            value={form.pastor}
+                                            onChange={e => setForm(f => ({ ...f, pastor: e.target.value }))}
+                                        />
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+                    ) : step === "class" ? (
+                        <div className="space-y-4">
+                            <h3 className="font-semibold text-foreground flex items-center gap-2"><BookOpen className="h-4 w-4 text-accent" /> Escolha sua Turma</h3>
+                            
+                            {/* Seleção do Polo */}
+                            <div className="mb-3">
+                                <label className="text-xs font-semibold text-muted-foreground block mb-2">Selecione o Polo de Ensino</label>
+                                <div className="grid grid-cols-2 gap-2">
+                                    {POLOS.map(p => (
+                                        <button
+                                            key={p.id}
+                                            type="button"
+                                            onClick={() => {
+                                                setSelectedPoloId(p.id)
+                                                setForm(f => ({ ...f, classId: "" }))
+                                            }}
+                                            className={`py-2 px-3 rounded-xl border text-xs sm:text-sm font-semibold transition-all flex items-center justify-center gap-1.5 ${
+                                                selectedPoloId === p.id
+                                                    ? 'border-primary bg-primary text-primary-foreground shadow-sm'
+                                                    : 'border-border bg-background hover:border-primary/50 text-foreground'
+                                            }`}
+                                        >
+                                            <MapPin className="h-3.5 w-3.5 shrink-0" />
+                                            <span className="truncate">{p.name}</span>
+                                        </button>
+                                    ))}
+                                </div>
+                            </div>
+
+                            {/* Seleção da Modalidade */}
+                            <div className="mb-4">
+                                <label className="text-xs font-semibold text-muted-foreground block mb-2">Selecione a Modalidade Desejada</label>
+                                <div className="grid grid-cols-1 sm:grid-cols-3 gap-2">
+                                    {[
+                                        { id: "presencial", label: "Presencial" },
+                                        { id: "semi_presencial", label: "Semi Presencial" },
+                                        { id: "online", label: "100% Online" }
+                                    ].map(mod => (
+                                        <button
+                                            key={mod.id}
+                                            type="button"
+                                            onClick={() => { setSelectedModality(mod.id as any); setForm(f => ({ ...f, classId: "" })) }}
+                                            className={`py-2 px-3 rounded-xl border text-sm font-medium transition-all ${selectedModality === mod.id ? 'border-accent bg-accent text-accent-foreground shadow-sm' : 'border-border bg-background hover:border-accent/50 text-foreground'}`}
+                                        >
+                                            {mod.label}
+                                        </button>
+                                    ))}
+                                </div>
+                            </div>
+
+                            {(() => {
+                                const filteredClasses = classes.filter(c => {
+                                    const cModality = c.modality || "presencial"
+                                    if (selectedModality && cModality !== selectedModality) return false
+
+                                    if (selectedModality === "online") {
+                                        if (c.poloId && c.poloId !== selectedPoloId) return false
+                                        return true
+                                    }
+
+                                    if (c.poloId) {
+                                        if (c.poloId !== selectedPoloId) return false
+                                    } else {
+                                        if (selectedPoloId !== "polo-tancredo-neves") return false
+                                    }
+
+                                    return true
+                                })
+
+                                if (selectedModality && filteredClasses.length === 0) {
+                                    const currentPoloName = POLOS.find(p => p.id === selectedPoloId)?.name || "Polo selecionado"
+                                    return (
+                                        <div className="bg-amber-50 border border-amber-200 rounded-xl p-4 text-sm text-amber-700">
+                                            <AlertCircle className="h-4 w-4 inline mr-2" />
+                                            Nenhuma turma disponível no {currentPoloName} para esta modalidade.
+                                        </div>
+                                    )
+                                }
+
+                                if (!selectedModality) {
+                                    return (
+                                        <div className="bg-muted border border-border rounded-xl p-4 text-sm text-muted-foreground text-center">
+                                            Selecione uma modalidade acima para ver as turmas disponíveis.
+                                        </div>
+                                    )
+                                }
+
+                                return (
+                                    <div className="space-y-3">
+                                        {filteredClasses.map(c => (
+                                            <button
+                                                key={c.id}
+                                                type="button"
+                                                onClick={() => setForm(f => ({ ...f, classId: c.id }))}
+                                                className={`w-full text-left rounded-xl border-2 p-4 transition-all ${form.classId === c.id ? "border-accent bg-accent/5 ring-2 ring-accent/20" : "border-border hover:border-accent/50"}`}
+                                            >
+                                                <div className="flex items-center justify-between">
+                                                    <div>
+                                                        <p className="font-semibold text-sm">{c.name}</p>
+                                                        <div className="text-xs text-muted-foreground mt-0.5 space-y-0.5">
+                                                            <p>
+                                                                {{ morning: "Manhã", afternoon: "Tarde", evening: "Noite", ead: "EAD/Online" }[c.shift]}
+                                                            </p>
+                                                            {schedules.filter(s => s.classId === c.id).length > 0 ? (
+                                                                <div className="flex flex-col gap-0.5">
+                                                                    {schedules.filter(s => s.classId === c.id).map(s => (
+                                                                        <p key={s.id} className="text-[10px] font-medium text-primary/80 uppercase tracking-tight">
+                                                                            {{
+                                                                                segunda: "Segunda", terca: "Terça", quarta: "Quarta",
+                                                                                quinta: "Quinta", sexta: "Sexta", sabado: "Sábado"
+                                                                            }[s.dayOfWeek] || s.dayOfWeek} • {s.timeStart.substring(0, 5)} - {s.timeEnd.substring(0, 5)}
+                                                                        </p>
+                                                                    ))}
+                                                                </div>
+                                                            ) : (
+                                                                c.dayOfWeek && (
+                                                                    <p className="text-[10px] uppercase">
+                                                                        {{
+                                                                            monday: "Segunda", tuesday: "Terça", wednesday: "Quarta",
+                                                                            thursday: "Quinta", friday: "Sexta", saturday: "Sábado"
+                                                                        }[c.dayOfWeek] || c.dayOfWeek}
+                                                                    </p>
+                                                                )
+                                                            )}
+                                                        </div>
+                                                    </div>
+                                                    <div className="text-right">
+                                                        <p className={`text-sm font-bold ${c.maxStudents - (c.studentCount || 0) <= 5 ? "text-destructive" : "text-accent"}`}>
+                                                            {Math.max(0, c.maxStudents - (c.studentCount || 0))} vagas restantes
+                                                        </p>
+                                                        {form.classId === c.id && <CheckCircle2 className="h-4 w-4 text-green-500 ml-auto mt-1" />}
+                                                        {c.maxStudents - (c.studentCount || 0) <= 0 && <span className="text-[10px] font-bold text-destructive uppercase">Esgotado</span>}
+                                                    </div>
+                                                </div>
+                                            </button>
+                                        ))}
+                                    </div>
+                                )
+                            })()}
+                        </div>
+                    ) : (
+                        <div className="space-y-4">
+                            <h3 className="font-semibold text-foreground flex items-center gap-2"><CreditCard className="h-4 w-4 text-accent" /> Pagamento da Matrícula</h3>
+                            <div className="bg-muted/40 rounded-xl p-4 flex items-center justify-between">
+                                <div>
+                                    <span className="text-sm font-semibold text-foreground">Taxa de Matrícula</span>
+                                    <p className="text-xs text-muted-foreground">{selectedModality === "online" ? "Modalidade Online (EAD)" : "Modalidade Presencial"}</p>
+                                </div>
+                                <span className="text-xl font-bold text-foreground">
+                                    R$ {((selectedModality === "online" ? (settings?.enrollmentFeeOnline ?? settings?.enrollmentFee) : settings?.enrollmentFee) || 60).toFixed(2)}
+                                </span>
+                            </div>
+
+                            {enrollError && (
+                                <div className="space-y-3">
+                                    <div className="bg-red-50 border border-red-200 text-red-700 rounded-xl px-4 py-3 text-sm flex items-center gap-2">
+                                        <AlertCircle className="h-4 w-4 shrink-0" />{enrollError}
+                                    </div>
+                                    <button
+                                        onClick={() => { setEnrollError(""); setPayMethod(null); }}
+                                        className="w-full flex items-center justify-center gap-2 bg-muted hover:bg-muted/80 text-foreground font-medium py-2.5 rounded-xl transition-colors text-sm"
+                                    >
+                                        <ChevronLeft className="h-4 w-4" /> Voltar e tentar novamente
+                                    </button>
+                                </div>
+                            )}
+
+                            {!payMethod && (
+                                <div className="space-y-3">
+                                    <p className="text-sm text-muted-foreground mr-1">Escolha a forma de pagamento:</p>
+
+                                    {/* Manual PIX */}
+                                    <button
+                                        onClick={() => setPayMethod("pix")}
+                                        className="w-full flex items-center gap-3 border-2 border-green-600 bg-green-50 rounded-xl p-4 hover:bg-green-100 transition-all group"
+                                    >
+                                        <div className="h-10 w-10 bg-green-600 rounded-full flex items-center justify-center text-white group-hover:scale-110 transition-transform">
+                                            <QrCode className="h-6 w-6" />
+                                        </div>
+                                        <div className="text-left flex-1">
+                                            <p className="font-bold text-green-700">Pagar com Pix</p>
+                                            <p className="text-xs text-green-600 font-medium">Pix Automático ou Copia e Cola</p>
+                                        </div>
+                                        <ChevronRight className="h-5 w-5 text-green-400" />
+                                    </button>
+
+                                    {/* Manual Credit Card Link */}
+                                    {settings?.creditCardUrl && (
+                                        <button
+                                            onClick={() => setPayMethod("card")}
+                                            className="w-full flex items-center gap-3 border-2 border-blue-600 bg-blue-50 rounded-xl p-4 hover:bg-blue-100 transition-all group"
+                                        >
+                                            <div className="h-10 w-10 bg-blue-600 rounded-full flex items-center justify-center text-white group-hover:scale-110 transition-transform">
+                                                <CreditCard className="h-6 w-6" />
+                                            </div>
+                                            <div className="text-left flex-1">
+                                                <p className="font-bold text-blue-700">Pagar com Cartão (Link Externo)</p>
+                                                <p className="text-xs text-blue-600 font-medium">Pagamento via Mercado Pago / PicPay</p>
+                                            </div>
+                                            <ChevronRight className="h-5 w-5 text-blue-400" />
+                                        </button>
+                                    )}
+
+                                    {/* Pay Later Option */}
+                                    <button
+                                        onClick={handlePayLater}
+                                        disabled={creating}
+                                        className="w-full flex items-center gap-3 border-2 border-amber-500 bg-amber-50 rounded-xl p-4 hover:bg-amber-100 transition-all group"
+                                    >
+                                        <div className="h-10 w-10 bg-amber-500 rounded-full flex items-center justify-center text-white group-hover:scale-110 transition-transform">
+                                            <Clock className="h-6 w-6" />
+                                        </div>
+                                        <div className="text-left flex-1">
+                                            <p className="font-bold text-amber-700">Concluir matrícula e pagar depois</p>
+                                            <p className="text-xs text-amber-600 font-medium">A matrícula só será efetivada após o pagamento (prazo: 5 dias)</p>
+                                        </div>
+                                        {creating ? <Loader2 className="h-5 w-5 animate-spin text-amber-400" /> : <ChevronRight className="h-5 w-5 text-amber-400" />}
+                                    </button>
+                                </div>
+                            )}
+
+
+                            {/* Pix Flow */}
+                            {payMethod === "pix" && (
+                                <div className="space-y-4">
+                                    <div className="border border-green-200 bg-white rounded-xl p-4 space-y-3 shadow-sm">
+                                        <div className="flex items-center gap-3">
+                                            <QrCode className="h-6 w-6 text-green-600 shrink-0" />
+                                            <div>
+                                                <p className="font-bold text-green-700">Pagamento via Pix</p>
+                                                <p className="text-xs text-muted-foreground italic">Copie a chave abaixo e realize o pagamento</p>
+                                            </div>
+                                        </div>
+                                        <div className="bg-muted/30 rounded-xl p-3 border border-border">
+                                            {dynamicPix ? (
+                                                <div className="flex flex-col items-center gap-2">
+                                                    <p className="text-xs font-semibold text-green-700 mb-1">Escaneie o QR Code ou copie a chave Pix Automática:</p>
+                                                    {dynamicPix.qrcode && (
+                                                        <img src={`data:image/png;base64,${dynamicPix.qrcode}`} alt="QR Code Pix" className="w-48 h-48 border rounded-lg p-2 bg-white shadow-sm" />
+                                                    )}
+                                                    <div className="flex gap-2 items-center w-full mt-2">
+                                                        <p className="text-xs font-mono flex-1 break-all bg-white p-2 rounded border text-center text-muted-foreground">{dynamicPix.copyPaste}</p>
+                                                    </div>
+                                                    <button
+                                                        onClick={async () => {
+                                                            if (!dynamicPix.copyPaste) return
+                                                            await navigator.clipboard.writeText(dynamicPix.copyPaste)
+                                                            setPixCopied(true)
+                                                            setTimeout(() => setPixCopied(false), 2000)
+                                                        }}
+                                                        className="w-full bg-green-600 text-white text-xs font-bold px-3 py-2.5 rounded-lg flex items-center justify-center gap-1 mt-1 active:scale-95 transition-transform"
+                                                    >
+                                                        <Copy className="h-4 w-4" />{pixCopied ? "Copiado!" : "Copiar Chave"}
+                                                    </button>
+                                                </div>
+                                            ) : (
+                                                <>
+                                                    <p className="text-xs font-semibold text-muted-foreground mb-1">Chave Pix da Instituição (Transferência Manual):</p>
+                                                    <div className="flex gap-2 items-center">
+                                                        <p className="text-sm font-mono flex-1 break-all">{settings?.pixKey || "Chave PIX não configurada"}</p>
+                                                        <button
+                                                            onClick={async () => {
+                                                                const key = settings?.pixKey || ""
+                                                                if (!key) {
+                                                                    alert("Chave PIX não configurada!")
+                                                                    return
+                                                                }
+                                                                await navigator.clipboard.writeText(key)
+                                                                setPixCopied(true)
+                                                                setTimeout(() => setPixCopied(false), 2000)
+                                                            }}
+                                                            className="shrink-0 bg-green-600 text-white text-xs font-bold px-3 py-1.5 rounded-lg flex items-center gap-1 active:scale-95 transition-transform"
+                                                        >
+                                                            <Copy className="h-3 w-3" />{pixCopied ? "Copiado!" : "Copiar"}
+                                                        </button>
+                                                    </div>
+                                                </>
+                                            )}
+                                        </div>
+                                        <div className="flex flex-col gap-2 pt-2">
+                                            {!enrollmentDetails ? (
+                                                <button
+                                                    onClick={handleCreateEnrollment}
+                                                    disabled={creating}
+                                                    className="w-full bg-accent text-accent-foreground font-bold py-3 rounded-xl shadow-md transition-all active:scale-95 text-sm flex items-center justify-center gap-2"
+                                                >
+                                                    {creating ? <Loader2 className="h-4 w-4 animate-spin" /> : <QrCode className="h-4 w-4" />}
+                                                    Gerar QR Code e Matrícula
+                                                </button>
+                                            ) : (
+                                                <div className="space-y-2">
+                                                    <div className="bg-blue-50 border border-blue-100 rounded-lg p-3 text-xs text-blue-700 text-center font-medium">
+                                                        Sua matrícula foi gerada! Conclua o processo abaixo após realizar o pagamento.
+                                                    </div>
+                                                    <button
+                                                        onClick={() => setSuccess(true)}
+                                                        className="w-full bg-green-600 hover:bg-green-700 text-white font-bold py-3 rounded-xl shadow-md transition-all active:scale-95 text-sm flex items-center justify-center gap-2"
+                                                    >
+                                                        <CheckCircle2 className="h-4 w-4" />
+                                                        Concluir Matrícula
+                                                    </button>
+                                                    <button
+                                                        onClick={handleWhatsAppConfirm}
+                                                        className="w-full bg-blue-500 hover:bg-blue-600 text-white font-bold py-2.5 rounded-xl shadow-sm transition-all text-xs flex items-center justify-center gap-2"
+                                                    >
+                                                        <MessageCircle className="h-4 w-4" />
+                                                        Confirmar Pagamento no WhatsApp
+                                                    </button>
+                                                </div>
+                                            )}
+                                        </div>
+                                    </div>
+                                    <button onClick={() => setPayMethod(null)} className="w-full text-xs text-muted-foreground hover:text-foreground transition-colors py-2">← Voltar às opções</button>
+                                </div>
+                            )}
+
+                            {/* Card Flow */}
+                            {payMethod === "card" && (
+                                <div className="space-y-4">
+                                    <div className="border border-blue-200 bg-white rounded-xl p-4 space-y-3 shadow-sm">
+                                        <div className="flex items-center gap-3">
+                                            <CreditCard className="h-6 w-6 text-blue-600 shrink-0" />
+                                            <div>
+                                                <p className="font-bold text-blue-700">Pagamento via Cartão</p>
+                                                <p className="text-xs text-muted-foreground italic">Clique no botão para abrir o link de pagamento</p>
+                                            </div>
+                                        </div>
+
+                                        <div className="flex flex-col gap-2 pt-2">
+                                            {!enrollmentDetails ? (
+                                                <button
+                                                    onClick={handleCardPay}
+                                                    disabled={creating}
+                                                    className="w-full bg-blue-600 text-white font-bold py-3 rounded-xl shadow-md transition-all active:scale-95 text-sm flex items-center justify-center gap-2"
+                                                >
+                                                    {creating ? <Loader2 className="h-4 w-4 animate-spin" /> : <CreditCard className="h-4 w-4" />}
+                                                    Abrir Link e Gerar Matrícula
+                                                </button>
+                                            ) : (
+                                                <div className="space-y-2">
+                                                    <div className="bg-blue-50 border border-blue-100 rounded-lg p-3 text-xs text-blue-700 text-center font-medium">
+                                                        Link aberto! Conclua o processo abaixo após realizar o pagamento.
+                                                    </div>
+                                                    <button
+                                                        onClick={() => setSuccess(true)}
+                                                        className="w-full bg-green-600 hover:bg-green-700 text-white font-bold py-3 rounded-xl shadow-md transition-all active:scale-95 text-sm flex items-center justify-center gap-2"
+                                                    >
+                                                        <CheckCircle2 className="h-4 w-4" />
+                                                        Concluir Matrícula
+                                                    </button>
+                                                    <button
+                                                        onClick={handleWhatsAppConfirm}
+                                                        className="w-full bg-blue-500 hover:bg-blue-600 text-white font-bold py-2.5 rounded-xl shadow-sm transition-all text-xs flex items-center justify-center gap-2"
+                                                    >
+                                                        <MessageCircle className="h-4 w-4" />
+                                                        Confirmar Pagamento no WhatsApp
+                                                    </button>
+                                                </div>
+                                            )}
+                                        </div>
+                                    </div>
+                                    <button onClick={() => setPayMethod(null)} className="w-full text-xs text-muted-foreground hover:text-foreground transition-colors py-2">← Voltar às opções</button>
+                                </div>
+                            )}
+
+
+                        </div>
+                    )}
+                </div>
+
+                {/* Footer Nav */}
+                {!loading && (
+                    <div className="px-6 py-4 border-t border-border flex gap-3 shrink-0">
+                        {step !== "personal" && (
+                            <button onClick={() => setStep(step === "class" ? "personal" : "class")} className="flex-1 flex items-center justify-center gap-2 border border-border rounded-xl py-3 text-sm font-medium hover:bg-muted transition-colors">
+                                <ChevronLeft className="h-4 w-4" /> Voltar
+                            </button>
+                        )}
+                        {step !== "payment" && (
+                            <button
+                                onClick={() => {
+                                    if (step === "personal") {
+                                        setStep("class")
+                                    } else if (step === "class") {
+                                        setShowConfirmModal(true)
+                                    }
+                                }}
+                                disabled={(step === "personal" && !isPersonalValid) || (step === "class" && !isClassValid)}
+                                className="flex-1 flex items-center justify-center gap-2 bg-accent text-accent-foreground font-bold rounded-xl py-3 text-sm disabled:opacity-50 hover:bg-accent/90 transition-colors"
+                            >
+                                {step === "class" ? "Ir para Pagamento" : "Próximo"} <ChevronRight className="h-4 w-4" />
+                            </button>
+                        )}
+                    </div>
+                )}
+            </div>
+
+            {/* Modal de Confirmação de Turma */}
+            <Dialog open={showConfirmModal} onOpenChange={setShowConfirmModal}>
+                <DialogContent className="sm:max-w-md rounded-3xl p-6 border border-border shadow-2xl bg-card">
+                    <DialogHeader className="text-left space-y-2">
+                        <div className="flex items-center gap-3">
+                            <div className="w-10 h-10 rounded-2xl bg-primary/10 text-primary flex items-center justify-center shrink-0">
+                                <GraduationCap className="h-5 w-5" />
+                            </div>
+                            <div>
+                                <DialogTitle className="text-lg font-bold">Confirmação de Turma</DialogTitle>
+                                <DialogDescription className="text-xs text-muted-foreground">
+                                    Confira os dados da sua turma antes de continuar para o pagamento:
+                                </DialogDescription>
+                            </div>
+                        </div>
+                    </DialogHeader>
+
+                    {selectedClass && (
+                        <div className="bg-muted/30 border border-border rounded-2xl p-4 space-y-3.5 my-1">
+                            {/* Turma */}
+                            <div className="flex items-start gap-3">
+                                <div className="p-2 rounded-xl bg-background border border-border text-foreground mt-0.5 shrink-0">
+                                    <GraduationCap className="h-4 w-4 text-primary" />
+                                </div>
+                                <div className="min-w-0">
+                                    <span className="text-[10px] font-bold text-muted-foreground uppercase tracking-wider block">Turma Selecionada</span>
+                                    <p className="text-sm font-bold text-foreground truncate">{selectedClass.name}</p>
+                                </div>
+                            </div>
+
+                            {/* Polo */}
+                            <div className="flex items-start gap-3">
+                                <div className="p-2 rounded-xl bg-background border border-border text-foreground mt-0.5 shrink-0">
+                                    <MapPin className="h-4 w-4 text-red-500" />
+                                </div>
+                                <div className="min-w-0">
+                                    <span className="text-[10px] font-bold text-muted-foreground uppercase tracking-wider block">Polo de Ensino</span>
+                                    <p className="text-sm font-semibold text-foreground">{getPoloLabel(selectedClass)}</p>
+                                </div>
+                            </div>
+
+                            {/* Modalidade */}
+                            <div className="flex items-start gap-3">
+                                <div className="p-2 rounded-xl bg-background border border-border text-foreground mt-0.5 shrink-0">
+                                    <BookOpen className="h-4 w-4 text-blue-500" />
+                                </div>
+                                <div className="min-w-0">
+                                    <span className="text-[10px] font-bold text-muted-foreground uppercase tracking-wider block">Modalidade</span>
+                                    <p className="text-sm font-semibold text-foreground">{getModalidadeLabel(selectedClass)}</p>
+                                </div>
+                            </div>
+
+                            {/* Horário / Dia */}
+                            <div className="flex items-start gap-3">
+                                <div className="p-2 rounded-xl bg-background border border-border text-foreground mt-0.5 shrink-0">
+                                    <Clock className="h-4 w-4 text-amber-500" />
+                                </div>
+                                <div className="min-w-0">
+                                    <span className="text-[10px] font-bold text-muted-foreground uppercase tracking-wider block">Dia e Horário</span>
+                                    <p className="text-sm font-semibold text-foreground">{getScheduleLabel(selectedClass)}</p>
+                                </div>
+                            </div>
+                        </div>
+                    )}
+
+                    <p className="text-xs text-center text-muted-foreground pt-1">
+                        Deseja confirmar e continuar ou prefere trocar de turma?
+                    </p>
+
+                    <DialogFooter className="flex flex-col sm:flex-row gap-2.5 pt-2">
+                        <button
+                            type="button"
+                            onClick={() => setShowConfirmModal(false)}
+                            className="flex-1 px-4 py-3 rounded-xl border border-border bg-muted/60 text-foreground font-semibold text-sm hover:bg-muted transition-colors text-center"
+                        >
+                            Trocar de Turma
+                        </button>
+                        <button
+                            type="button"
+                            onClick={() => {
+                                setShowConfirmModal(false)
+                                setStep('payment')
+                            }}
+                            className="flex-1 px-4 py-3 rounded-xl bg-primary text-primary-foreground font-bold text-sm shadow-md hover:bg-primary/90 transition-all flex items-center justify-center gap-1.5"
+                        >
+                            Continuar <ArrowRight className="h-4 w-4" />
+                        </button>
+                    </DialogFooter>
+                </DialogContent>
+            </Dialog>
+
+            <AlertDialog open={exitConfirmOpen} onOpenChange={setExitConfirmOpen}>
+                <AlertDialogContent>
+                    <AlertDialogHeader>
+                        <AlertDialogTitle>Matrícula não concluída</AlertDialogTitle>
+                        <AlertDialogDescription>
+                            Sua matrícula ainda não foi finalizada. Se você sair agora, seus dados não serão salvos. Tem certeza que deseja sair?
+                        </AlertDialogDescription>
+                    </AlertDialogHeader>
+                    <AlertDialogFooter>
+                        <AlertDialogCancel>Continuar Matrícula</AlertDialogCancel>
+                        <AlertDialogAction onClick={onClose} className="bg-destructive text-destructive-foreground hover:bg-destructive/90">
+                            Sair e Cancelar
+                        </AlertDialogAction>
+                    </AlertDialogFooter>
+                </AlertDialogContent>
+            </AlertDialog>
+        </div>
+    )
+}

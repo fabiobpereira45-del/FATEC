@@ -1,0 +1,334 @@
+import { useEffect, useState } from "react"
+import { FileText, Award, CalendarCheck, Loader2, Calculator, CheckCircle2, Clock, Download } from "lucide-react"
+import {
+    type Discipline, type Semester, type StudentSubmission, type Attendance, type Assessment, type StudentGrade, type StudentProfile,
+    getDisciplines, getSemesters, getSubmissions, getAttendances, getAssessments, getStudentGrades, getStudentAttendances,
+    getGradeSettings, calculateGlobalAverage, type GradeSettings, getClasses
+} from "@/lib/store"
+import { printStudentBoletimPDF } from "@/lib/pdf"
+import { Button } from "@/components/ui/button"
+
+interface Props {
+    studentId: string
+    studentEmail: string
+    studentDoc?: string
+    studentProfile?: StudentProfile | null
+}
+
+export function StudentGradesView({ studentId, studentEmail, studentDoc, studentProfile }: Props) {
+    const [disciplines, setDisciplines] = useState<Discipline[]>([])
+    const [semesters, setSemesters] = useState<Semester[]>([])
+    const [officialGrades, setOfficialGrades] = useState<StudentGrade[]>([])
+    const [submissions, setSubmissions] = useState<StudentSubmission[]>([])
+    const [attendances, setAttendances] = useState<Attendance[]>([])
+    const [gradeSettings, setGradeSettings] = useState<GradeSettings | null>(null)
+    const [selectedDisciplineId, setSelectedDisciplineId] = useState<string>("all")
+    const [loading, setLoading] = useState(true)
+
+    useEffect(() => {
+        async function loadData() {
+            setLoading(true)
+            try {
+                const [d, sem, sub, allGrades, fetchedSettings] = await Promise.all([
+                    getDisciplines(),
+                    getSemesters(),
+                    getSubmissions(),
+                    getStudentGrades(),
+                    getGradeSettings()
+                ])
+
+                setDisciplines(d)
+                setSemesters(sem)
+                setGradeSettings(fetchedSettings)
+
+                // Audit Logs for Debugging
+                console.log("--- AUDIT NOTAS ---")
+                console.log("Student Profile:", { studentId, studentEmail, studentDoc })
+
+                // Filter official grades by student ID OR Email/CPF/Enrollment for backward compatibility
+                const myGrades = allGrades.filter(g => {
+                    const idMatch = !!(studentId && (g.studentId === studentId || g.student_id === studentId));
+                    
+                    const cleanDoc = studentDoc?.replace(/\D/g, '') || "";
+                    const cleanIdentifier = g.studentIdentifier?.replace(/\D/g, '') || "";
+                    const docMatch = !!(cleanDoc && cleanIdentifier && cleanDoc === cleanIdentifier);
+                    
+                    const emailMatch = !!(g.studentIdentifier && studentEmail && g.studentIdentifier.toLowerCase().trim() === studentEmail.toLowerCase().trim());
+                    
+                    const rawIdentMatch = !!(g.studentIdentifier && (g.studentIdentifier === studentDoc || g.studentIdentifier === studentId));
+
+                    const matched = idMatch || docMatch || emailMatch || rawIdentMatch;
+                    
+                    if (matched) {
+                         console.log("MATCH FOUND for discipline:", g.disciplineId, { idMatch, docMatch, emailMatch, rawIdentMatch });
+                    }
+                    
+                    return matched;
+                })
+
+                console.log("Total Grades Found:", myGrades.length)
+                setOfficialGrades(myGrades)
+
+                // Fetch assessments to link submissions to disciplines
+                const assessments = await getAssessments()
+
+                // Filter submissions by student ID
+                const mySubs = sub.filter(s => {
+                    if (s.studentId !== studentId) return false
+                    
+                    // Find the discipline for this submission
+                    const assessment = assessments.find(a => a.id === s.assessmentId)
+                    if (!assessment) return false
+                    
+                    // Check if there is a released official grade for this discipline
+                    const grade = myGrades.find(g => (g.disciplineId === assessment.disciplineId))
+                    return grade?.isPublic === true
+                })
+                setSubmissions(mySubs)
+
+                // Attendances (Optimized: Single query by student ID)
+                const myAtts = await getStudentAttendances(studentId)
+                setAttendances(myAtts)
+
+            } catch (err) {
+                console.error("Erro ao carregar notas:", err)
+            } finally {
+                setLoading(false)
+            }
+        }
+
+        loadData()
+    }, [studentId, studentEmail])
+
+    if (loading) {
+        return <div className="flex justify-center p-12"><Loader2 className="h-8 w-8 animate-spin text-muted-foreground" /></div>
+    }
+
+    const calculateAverage = (grade: StudentGrade) => {
+        if (!gradeSettings) return "0.00"
+        return calculateGlobalAverage(grade, gradeSettings)
+    }
+
+    return (
+        <div className="flex flex-col gap-8 animate-in fade-in slide-in-from-bottom-4 duration-500">
+
+            {/* Resumo de Destaque */}
+            <div className="bg-primary/5 border border-primary/20 rounded-2xl p-6 flex flex-col md:flex-row items-center gap-6 shadow-sm">
+                <div className="h-16 w-16 bg-primary text-primary-foreground rounded-2xl flex items-center justify-center shadow-lg">
+                    <Award className="h-8 w-8" />
+                </div>
+                <div className="flex-1 text-center md:text-left">
+                    <h3 className="text-xl font-bold text-foreground">Meu Desempenho Oficial</h3>
+                    <p className="text-sm text-muted-foreground">Aqui você encontra as notas finais lançadas e validadas pela secretaria e professores.</p>
+                </div>
+                <div className="flex items-center gap-4">
+                    <div className="text-center">
+                        <div className="text-[10px] uppercase font-bold text-muted-foreground tracking-widest mb-1">Disciplinas</div>
+                        <div className="text-2xl font-black text-primary">{officialGrades.length}</div>
+                    </div>
+                    {officialGrades.length > 0 && gradeSettings && (
+                        <Button
+                            size="sm"
+                            variant="outline"
+                            className="gap-2 border-primary text-primary hover:bg-primary/10 h-9 font-bold"
+                            onClick={() => {
+                                const classes: any[] = []
+                                printStudentBoletimPDF({
+                                    student: {
+                                        name: studentProfile?.name || 'Aluno(a)',
+                                        enrollment_number: studentProfile?.enrollment_number || studentId,
+                                        cpf: studentProfile?.cpf,
+                                        email: studentProfile?.email || studentEmail,
+                                        class_name: undefined,
+                                        modality: studentProfile?.modality || undefined,
+                                        avatar_url: studentProfile?.avatar_url,
+                                    },
+                                    grades: officialGrades,
+                                    disciplines,
+                                    semesters,
+                                    gradeSettings,
+                                })
+                            }}
+                        >
+                            <Download className="h-4 w-4" /> Baixar Boletim PDF
+                        </Button>
+                    )}
+                </div>
+            </div>
+
+            <div className="flex flex-col gap-6">
+                <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4 border-b border-border pb-2">
+                    <h3 className="text-xl font-bold font-serif text-foreground flex items-center gap-2">
+                        <Calculator className="h-5 w-5 text-primary" />
+                        Boletim de Notas
+                    </h3>
+                    
+                    <div className="flex items-center gap-2 bg-muted/30 px-3 py-1.5 rounded-lg border border-border/50">
+                        <span className="text-[10px] font-bold text-muted-foreground uppercase tracking-wider">Filtrar Disciplina:</span>
+                        <select
+                            className="bg-transparent border-none text-xs font-bold focus:ring-0 cursor-pointer text-foreground"
+                            value={selectedDisciplineId}
+                            onChange={(e) => setSelectedDisciplineId(e.target.value)}
+                        >
+                            <option value="all">Todas as Disciplinas</option>
+                            {officialGrades
+                                .map(g => ({ id: g.disciplineId, name: disciplines.find(d => d.id === g.disciplineId)?.name || "Disciplina Geral" }))
+                                .sort((a, b) => a.name.localeCompare(b.name))
+                                .map(d => <option key={d.id} value={d.id}>{d.name}</option>)
+                            }
+                        </select>
+                    </div>
+                </div>
+
+                {officialGrades.length === 0 ? (
+                    <div className="bg-card border border-border border-dashed rounded-xl p-10 text-center text-muted-foreground">
+                        <FileText className="h-10 w-10 mx-auto opacity-20 mb-3" />
+                        <p className="text-sm">Nenhuma nota oficial lançada até o momento.</p>
+                    </div>
+                ) : (
+                    <div className="grid grid-cols-1 gap-4">
+                        {officialGrades
+                            .filter(g => selectedDisciplineId === "all" || g.disciplineId === selectedDisciplineId)
+                            .map(grade => {
+                                const disc = disciplines.find(d => d.id === grade.disciplineId)
+                                const avg = parseFloat(calculateAverage(grade))
+                                const isApproved = avg >= 7.0;
+                                // A discipline is "ongoing" if not concluded AND exam grade not yet recorded
+                                const isOngoing = disc?.isConcluded !== true && grade.examGrade === 0;
+
+                            return (
+                                <div key={grade.id} className={`bg-card border rounded-xl p-6 shadow-sm hover:shadow-md transition-shadow ${
+                                    grade.isPublic && !isApproved && !isOngoing ? 'border-red-300 bg-red-50/30' : 'border-border'
+                                }`}>
+                                    <div className="flex flex-col md:flex-row justify-between gap-4">
+                                        <div className="space-y-1">
+                                            <div className="flex items-center gap-2 flex-wrap">
+                                                <h4 className="font-bold text-lg text-foreground">{disc?.name || "Disciplina Geral"}</h4>
+                                                {/* Status badge */}
+                                                {grade.isPublic && !isApproved && !isOngoing && (
+                                                    <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-red-600 text-white text-[10px] font-black uppercase tracking-tighter animate-pulse">
+                                                        ⚠️ REPROVADO
+                                                    </span>
+                                                )}
+                                                {grade.isPublic && !isApproved && isOngoing && (
+                                                    <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-blue-100 text-blue-700 text-[10px] font-black uppercase tracking-tighter">
+                                                        🔵 Em Andamento
+                                                    </span>
+                                                )}
+                                                {grade.isPublic && isApproved && (
+                                                    <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-green-100 text-green-700 text-[10px] font-black uppercase tracking-tighter">
+                                                        ✔️ APROVADO
+                                                    </span>
+                                                )}
+                                            </div>
+                                            <p className="text-xs text-muted-foreground uppercase tracking-wider font-semibold">Semestre: {semesters.find(s => s.id === disc?.semesterId)?.name || "N/A"}</p>
+                                        </div>
+
+                                        <div className={`flex items-center gap-4 p-3 rounded-xl border ${
+                                            grade.isPublic && !isApproved && !isOngoing ? 'bg-red-100/50 border-red-200' : 'bg-muted/50 border-border'
+                                        }`}>
+                                            <div className="text-right">
+                                                <div className="text-[10px] uppercase font-bold text-muted-foreground">{grade.isPublic ? (isApproved ? "MÉDIA FINAL" : "MÉDIA FINAL") : "Média Final"}</div>
+                                                <div className={`text-2xl font-black ${
+                                                    grade.isPublic 
+                                                        ? (isApproved ? 'text-green-600' : isOngoing ? 'text-blue-600' : 'text-red-600') 
+                                                        : 'text-muted-foreground opacity-50'
+                                                }`}>
+                                                    {grade.isPublic ? avg.toFixed(2) : "--"}
+                                                </div>
+                                            </div>
+                                            <div className={`h-10 w-10 rounded-full flex items-center justify-center ${
+                                                grade.isPublic 
+                                                    ? (isApproved ? 'bg-green-100 text-green-600' : isOngoing ? 'bg-blue-100 text-blue-600' : 'bg-red-100 text-red-600') 
+                                                    : 'bg-muted text-muted-foreground'
+                                            }`}>
+                                                {grade.isPublic 
+                                                    ? (isApproved ? <CheckCircle2 className="h-6 w-6" /> : <Award className="h-6 w-6" />) 
+                                                    : <Clock className="h-6 w-6" />}
+                                            </div>
+                                        </div>
+                                    </div>
+
+                                    {/* Alerta de recuperação — só exibir se disciplina concluída e reprovado */}
+                                    {grade.isPublic && !isApproved && !isOngoing && (
+                                        <div className="mt-4 p-3 bg-red-50 border border-red-200 rounded-xl flex items-start gap-3">
+                                            <div className="mt-0.5 h-5 w-5 bg-red-500 rounded-full flex items-center justify-center shrink-0">
+                                                <span className="text-white text-[10px] font-black">!</span>
+                                            </div>
+                                            <div>
+                                                <p className="text-xs font-bold text-red-800">Você foi reprovado nesta disciplina</p>
+                                                <p className="text-[11px] text-red-700 mt-0.5">Sua média final ({avg.toFixed(2)}) está abaixo da mínima exigida (7.0). Entre em contato com a secretaria ou fique atento à abertura da Prova de Recuperação.</p>
+                                            </div>
+                                        </div>
+                                    )}
+                                    {/* Aviso de disciplina em andamento */}
+                                    {grade.isPublic && !isApproved && isOngoing && (
+                                        <div className="mt-4 p-3 bg-blue-50 border border-blue-200 rounded-xl flex items-start gap-3">
+                                            <div className="mt-0.5 h-5 w-5 bg-blue-500 rounded-full flex items-center justify-center shrink-0">
+                                                <Clock className="h-3 w-3 text-white" />
+                                            </div>
+                                            <div>
+                                                <p className="text-xs font-bold text-blue-800">Disciplina em andamento</p>
+                                                <p className="text-[11px] text-blue-700 mt-0.5">A nota da prova ainda não foi lançada pelo professor. O status final será definido após o encerramento da disciplina.</p>
+                                            </div>
+                                        </div>
+                                    )}
+
+                                    <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 mt-6">
+                                        {[
+                                            { label: "Presença", val: grade.attendanceScore, isSecret: false, color: "text-blue-600" },
+                                            { label: "Prova", val: grade.examGrade, isSecret: !grade.isPublic, color: "text-primary" },
+                                            { label: "Trabalhos", val: grade.worksGrade, isSecret: false, color: "text-foreground" },
+                                            { label: "Pontos Extras", val: grade.participationBonus, isSecret: false, color: "text-amber-600" },
+                                        ].map(item => (
+                                            <div key={item.label} className={`bg-background border border-border rounded-lg p-3 text-center ${item.isSecret ? 'opacity-60 bg-muted/20' : ''}`}>
+                                                <div className="text-[10px] text-muted-foreground font-bold uppercase mb-1">{item.label}</div>
+                                                <div className={`font-bold ${item.color}`}>
+                                                    {item.isSecret ? "🔒" : (item.val || 0).toFixed(1)}
+                                                </div>
+                                            </div>
+                                        ))}
+                                    </div>
+                                    {!grade.isPublic && (
+                                        <div className="mt-4 text-[10px] bg-amber-50 text-amber-700 p-2 rounded-md border border-amber-100 flex items-center gap-2">
+                                            <Clock className="h-3 w-3" />
+                                            A nota de presença e trabalhos estão liberadas. A nota da prova e média final serão liberadas pelo professor.
+                                        </div>
+                                    )}
+                                    <div className="mt-4 text-[10px] text-muted-foreground text-right italic font-medium">
+                                        Fórmula: {gradeSettings 
+                                            ? (gradeSettings.divisor > 1 
+                                                ? `(Soma de Notas) / ${gradeSettings.divisor}`
+                                                : `(Prova * ${gradeSettings.examWeight/10}) + (Teste * ${gradeSettings.testWeight/10}) + (Trabalho * ${gradeSettings.workWeight/10}) + Presença`)
+                                            : "(Nota da Prova + Nota de Presença) / 2"}
+                                    </div>
+                                </div>
+                            )
+                        })}
+                    </div>
+                )}
+            </div>
+
+            {/* Histórico de Tentativas (Submissões de Prova) */}
+            {submissions.length > 0 && (
+                <div className="mt-4">
+                    <h4 className="text-lg font-bold text-foreground mb-4 opacity-70">Histórico de Respostas (Simulados/Provas Online)</h4>
+                    <div className="space-y-3">
+                        {submissions.map(sub => (
+                            <div key={sub.id} className="bg-muted/30 border border-border rounded-lg p-4 flex items-center justify-between text-sm">
+                                <div>
+                                    <p className="font-semibold text-foreground">Resultado de Prova Online</p>
+                                    <p className="text-xs text-muted-foreground">Enviado em {new Date(sub.submittedAt).toLocaleDateString()}</p>
+                                </div>
+                                <div className="text-right">
+                                    <div className="font-bold">{sub.score} / {sub.totalPoints} pts</div>
+                                    <div className="text-xs text-primary">{sub.percentage}% de acerto</div>
+                                </div>
+                            </div>
+                        ))}
+                    </div>
+                </div>
+            )}
+        </div>
+    )
+}

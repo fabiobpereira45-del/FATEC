@@ -1,0 +1,511 @@
+"use client"
+
+import { useEffect, useState } from "react"
+import { Clock, DollarSign, CheckCircle2, AlertCircle, Loader2, XCircle, CreditCard, Copy, MessageCircle, QrCode } from "lucide-react"
+import { type FinancialCharge, getFinancialCharges, getFinancialSettings, type FinancialSettings } from "@/lib/store"
+import { Button } from "@/components/ui/button"
+
+interface Props {
+    studentId: string
+}
+
+export function FinancialStudentView({ studentId }: Props) {
+    const [charges, setCharges] = useState<FinancialCharge[]>([])
+    const [loading, setLoading] = useState(true)
+
+    const [settings, setSettings] = useState<FinancialSettings | null>(null)
+
+    // Bulk Selection State
+    const [selectedChargeIds, setSelectedChargeIds] = useState<string[]>([])
+
+    // Manual Payment Modal state
+    const [showPayModal, setShowPayModal] = useState(false)
+    const [pixCopied, setPixCopied] = useState(false)
+
+    // Asaas Pix State
+    const [isGeneratingPix, setIsGeneratingPix] = useState(false)
+    const [dynamicPix, setDynamicPix] = useState<{ qrcode?: string; copyPaste?: string } | null>(null)
+
+    async function load() {
+        setLoading(true)
+        const [allCharges, finSettings] = await Promise.all([
+            getFinancialCharges(),
+            getFinancialSettings()
+        ])
+        setCharges(allCharges.filter(c => c.studentId === studentId))
+        setSettings(finSettings)
+        setLoading(false)
+    }
+
+    useEffect(() => { load() }, [studentId])
+
+    function getStatusBadge(status: string) {
+        if (status === 'paid') return <span className="bg-green-100 text-green-700 text-xs px-2 py-0.5 rounded-full font-medium flex items-center gap-1"><CheckCircle2 className="h-3 w-3" /> Pago</span>
+        if (status === 'late') return <span className="bg-red-100 text-red-700 text-xs px-2 py-0.5 rounded-full font-medium flex items-center gap-1"><AlertCircle className="h-3 w-3" /> Atrasado</span>
+        if (status === 'cancelled') return <span className="bg-muted text-muted-foreground text-xs px-2 py-0.5 rounded-full font-medium flex items-center gap-1">Cancelado</span>
+        if (status === 'bolsa100') return <span className="bg-blue-100 text-blue-700 text-xs px-2 py-0.5 rounded-full font-medium flex items-center gap-1">Bolsa 100%</span>
+        if (status === 'bolsa50') return <span className="bg-blue-100 text-blue-700 text-xs px-2 py-0.5 rounded-full font-medium flex items-center gap-1">Bolsa 50%</span>
+        if (status === 'isento') return <span className="bg-purple-100 text-purple-700 text-xs px-2 py-0.5 rounded-full font-medium flex items-center gap-1">Isento</span>
+        return <span className="bg-amber-100 text-amber-700 text-xs px-2 py-0.5 rounded-full font-medium flex items-center gap-1"><Clock className="h-3 w-3" /> Pendente</span>
+    }
+
+
+
+    const toggleSelection = (id: string) => {
+        setSelectedChargeIds(prev =>
+            prev.includes(id) ? prev.filter(x => x !== id) : [...prev, id]
+        )
+    }
+
+    const toggleAll = (ids: string[]) => {
+        if (selectedChargeIds.length === ids.length && ids.length > 0) {
+            setSelectedChargeIds([])
+        } else {
+            setSelectedChargeIds(ids)
+        }
+    }
+
+
+
+    function closeModal() {
+        setShowPayModal(false)
+        setDynamicPix(null)
+    }
+
+    async function handleGenerateAsaasPix() {
+        setIsGeneratingPix(true)
+        try {
+            const res = await fetch("/api/asaas/create-pix", {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({ chargeIds: selectedChargeIds })
+            })
+            const data = await res.json()
+            if (!res.ok) throw new Error(data.error || "Erro ao gerar Pix automático.")
+            setDynamicPix({
+                qrcode: data.pixQrcode,
+                copyPaste: data.pixCopyPaste
+            })
+            // Reload charges to reflect saved PIX data
+            load()
+        } catch (error: any) {
+            alert(error.message)
+        } finally {
+            setIsGeneratingPix(false)
+        }
+    }
+
+    function handleWhatsAppConfirm() {
+        const selectedDescriptions = sortedCharges
+            .filter(c => selectedChargeIds.includes(c.id))
+            .map(c => `- ${c.description} (Venc: ${new Date(c.dueDate).toLocaleDateString("pt-BR")})`)
+            .join("\n")
+
+        const message = `Olá! Realizei o pagamento das seguintes faturas na FATEC:\n\n${selectedDescriptions}\n\n*Estou enviando o comprovante de pagamento em anexo.*`
+        const encoded = encodeURIComponent(message)
+        window.open(`https://wa.me/5521974796365?text=${encoded}`, "_blank")
+    }
+
+    if (loading) {
+        return <div className="flex justify-center p-8"><Loader2 className="h-6 w-6 animate-spin text-muted-foreground" /></div>
+    }
+
+    const sortedCharges = [...charges].sort((a, b) => {
+        if (a.type === 'enrollment' && b.type !== 'enrollment') return -1;
+        if (b.type === 'enrollment' && a.type !== 'enrollment') return 1;
+        const timeA = new Date(a.dueDate).getTime();
+        const timeB = new Date(b.dueDate).getTime();
+        if (timeA !== timeB) return timeA - timeB;
+        return (a.description || "").localeCompare(b.description || "");
+    })
+    const hasPendingOrLate = sortedCharges.some(c => c.status === 'pending' || c.status === 'late')
+    const pendingCharges = sortedCharges.filter(c => c.status === 'pending' || c.status === 'late')
+
+    const selectedCharges = sortedCharges.filter(c => selectedChargeIds.includes(c.id))
+    const totalSelectedAmount = selectedCharges.reduce((acc, curr) => acc + curr.amount, 0)
+    const monthlyCount = selectedCharges.filter(c => c.type === 'monthly').length
+    const hasDiscount = monthlyCount >= 2
+    const finalAmount = hasDiscount ? totalSelectedAmount * 0.95 : totalSelectedAmount
+
+    return (
+        <div className="flex flex-col gap-6">
+
+            {/* Manual Payment Instructions Modal */}
+            {showPayModal && (
+                <div className="fixed inset-0 bg-black/60 backdrop-blur-sm z-50 overflow-y-auto overscroll-contain">
+                    <div className="flex min-h-full items-center justify-center p-4">
+                    <div className="bg-card rounded-2xl shadow-2xl p-6 w-full max-w-md border border-border">
+                        <div className="flex items-start justify-between mb-4">
+                            <div>
+                                <h3 className="text-lg font-bold text-foreground">Como Pagar</h3>
+                                <p className="text-sm text-muted-foreground mt-1">Siga as instruções abaixo para realizar o pagamento.</p>
+                            </div>
+                            <button onClick={closeModal} className="text-muted-foreground hover:text-foreground transition-colors rounded-full p-1 hover:bg-muted">
+                                <XCircle className="h-5 w-5" />
+                            </button>
+                        </div>
+
+                        <div className="bg-muted/40 rounded-xl p-4 text-center mb-6 flex flex-col items-center">
+                            {hasDiscount && <span className="text-[10px] bg-green-100 text-green-700 px-3 py-1 rounded-full font-black mb-2 uppercase tracking-tight">Economia de R$ {(totalSelectedAmount - finalAmount).toFixed(2)} acumulada!</span>}
+                            <span className="text-3xl font-black text-foreground tracking-tight">R$ {finalAmount.toFixed(2)}</span>
+                            {hasDiscount && <span className="text-xs text-muted-foreground line-through opacity-70 mt-1 italic font-medium">R$ {totalSelectedAmount.toFixed(2)} sem desconto</span>}
+                        </div>
+
+                        <div className="space-y-4">
+                            {/* Option 1: Pix Dinâmico (Asaas) ou Estático */}
+                            <div className="border-2 border-green-500 bg-green-50/50 rounded-xl p-5 space-y-3 shadow-sm">
+                                <div className="flex items-center justify-between">
+                                    <div className="flex items-center gap-2">
+                                        <QrCode className="h-6 w-6 text-green-600" />
+                                        <p className="font-black text-green-700 text-base">Opção 1: Pix Automático (Asaas)</p>
+                                    </div>
+                                    <span className="text-[10px] font-bold bg-green-600 text-white px-2 py-0.5 rounded-full uppercase">Melhor Opção</span>
+                                </div>
+                                <div className="bg-white border border-green-200 rounded-lg p-4 shadow-inner">
+                                    {dynamicPix ? (
+                                        <div className="flex flex-col items-center gap-3">
+                                            {dynamicPix.qrcode && (
+                                                <img src={`data:image/png;base64,${dynamicPix.qrcode}`} alt="QR Code Pix" className="w-48 h-48 border rounded-lg p-2" />
+                                            )}
+                                            <p className="text-[10px] uppercase font-black text-muted-foreground mb-1 tracking-widest text-center">Pix Copia e Cola:</p>
+                                            <div className="flex flex-col gap-2 w-full">
+                                                <code className="text-xs font-mono text-muted-foreground bg-muted/50 p-2 rounded block break-all text-center">{dynamicPix.copyPaste}</code>
+                                                <Button
+                                                    onClick={async () => {
+                                                        if (!dynamicPix.copyPaste) return
+                                                        await navigator.clipboard.writeText(dynamicPix.copyPaste)
+                                                        setPixCopied(true)
+                                                        setTimeout(() => setPixCopied(false), 2000)
+                                                    }}
+                                                    className="w-full bg-green-600 hover:bg-green-700 text-white font-bold"
+                                                >
+                                                    <Copy className="h-4 w-4 mr-2" /> {pixCopied ? "Copiado!" : "Copiar Chave"}
+                                                </Button>
+                                            </div>
+                                            <p className="text-xs text-green-700 text-center mt-2 font-medium">A liberação no sistema ocorrerá automaticamente após o pagamento.</p>
+                                        </div>
+                                    ) : (
+                                        <div className="flex flex-col gap-3">
+                                            <p className="text-xs text-green-800 text-center font-medium">Gere seu QR Code único para baixa automática da mensalidade.</p>
+                                            <Button 
+                                                onClick={handleGenerateAsaasPix}
+                                                disabled={isGeneratingPix}
+                                                className="w-full bg-green-600 hover:bg-green-700 text-white font-bold h-10"
+                                            >
+                                                {isGeneratingPix ? <Loader2 className="h-4 w-4 mr-2 animate-spin" /> : <QrCode className="h-4 w-4 mr-2" />}
+                                                {isGeneratingPix ? "Gerando Pix..." : "Gerar Pix Automático"}
+                                            </Button>
+                                            
+                                            {settings?.pixKey && (
+                                                <div className="mt-4 pt-4 border-t border-green-100 flex flex-col items-center">
+                                                    <p className="text-[10px] uppercase font-bold text-muted-foreground mb-2">Pix Manual Alternativo (Aprovação Demorada)</p>
+                                                    <div className="flex items-center gap-2 w-full">
+                                                        <code className="text-xs font-mono font-black text-foreground flex-1 break-all bg-green-50 p-2 rounded text-center">{settings.pixKey}</code>
+                                                    </div>
+                                                </div>
+                                            )}
+                                        </div>
+                                    )}
+                                </div>
+                                <p className="text-[10px] text-green-700/70 font-medium italic">* O desconto de 5% já está aplicado no valor total acima para 2+ meses.</p>
+                            </div>
+
+                            {/* Option 2: Boleto */}
+                            <div className="border border-amber-200 bg-amber-50/30 rounded-xl p-4 space-y-3">
+                                <div className="flex items-center gap-2">
+                                    <DollarSign className="h-5 w-5 text-amber-600" />
+                                    <p className="font-bold text-amber-700 text-sm">Opção 2: Boleto Bancário</p>
+                                </div>
+                                <div className="bg-white border border-amber-100 rounded-lg p-3 text-center">
+                                    <p className="text-xs text-amber-800 font-medium mb-2">Para pagar via boleto, solicite ao suporte ou aguarde o envio mensal.</p>
+                                    <Button
+                                        variant="outline"
+                                        onClick={() => window.open(`https://wa.me/5521974796365?text=Olá, gostaria de solicitar um boleto para minha mensalidade.`, "_blank")}
+                                        className="w-full border-amber-300 text-amber-700 hover:bg-amber-50 font-bold h-9 text-[11px]"
+                                    >
+                                        Solicitar Boleto via WhatsApp
+                                    </Button>
+                                </div>
+                            </div>
+
+                            {/* Option 2: Credit Card Link */}
+                            {settings?.creditCardUrl && (
+                                <div className="border border-blue-200 bg-blue-50/30 rounded-xl p-4 space-y-3">
+                                    <div className="flex items-center gap-2">
+                                        <CreditCard className="h-5 w-5 text-blue-600" />
+                                        <p className="font-bold text-blue-700 text-sm">Opção 2: Pagar com Cartão</p>
+                                    </div>
+                                    <Button
+                                        onClick={() => window.open(settings.creditCardUrl, "_blank")}
+                                        className="w-full bg-blue-600 hover:bg-blue-700 text-white font-bold h-10 text-xs"
+                                    >
+                                        Abrir Link de Pagamento (Externo)
+                                    </Button>
+                                </div>
+                            )}
+
+                            {/* Step 3: WhatsApp Confirmation */}
+                            <div className="bg-amber-50 border border-amber-200 rounded-xl p-4 text-center">
+                                <p className="text-xs text-amber-800 font-medium mb-3 underline decoration-amber-300">Após pagar, é obrigatório enviar o comprovante:</p>
+                                <Button
+                                    onClick={handleWhatsAppConfirm}
+                                    className="w-full bg-green-500 hover:bg-green-600 text-white font-bold h-12 flex items-center justify-center gap-2 shadow-lg hover:translate-y-[-2px] transition-all"
+                                >
+                                    <MessageCircle className="h-5 w-5" />
+                                    Enviar Comprovante via WhatsApp
+                                </Button>
+                                <p className="text-[10px] text-muted-foreground mt-2">Aguarde a conferência manual para a baixa no sistema.</p>
+                            </div>
+                        </div>
+                    </div>
+                    </div>
+                </div>
+            )}
+
+
+
+            {hasPendingOrLate && (
+                <div className="bg-blue-50 border border-blue-200 text-blue-800 rounded-xl p-4 flex gap-3 text-sm shadow-sm group hover:scale-[1.01] transition-transform">
+                    <AlertCircle className="h-5 w-5 shrink-0 text-blue-500" />
+                    <div>
+                        <p className="font-bold mb-1">PROMOÇÃO: Pagamento em Lote</p>
+                        <p className="text-blue-700/80">Selecione <strong>2 ou mais mensalidades</strong> e ganhe <strong>5% de desconto</strong> automático no Pix ou Cartão!</p>
+                    </div>
+                </div>
+            )}
+
+            {sortedCharges.length === 0 ? (
+                <div className="bg-card border border-border border-dashed rounded-xl p-12 text-center flex flex-col items-center">
+                    <DollarSign className="h-12 w-12 text-muted-foreground opacity-30 mb-4" />
+                    <h3 className="text-lg font-semibold text-foreground mb-1">Sem Lançamentos</h3>
+                    <p className="text-muted-foreground text-sm max-w-md">Você não possui histórico financeiro ou faturas em aberto no momento.</p>
+                </div>
+            ) : (
+                <div className="bg-card border border-border rounded-xl overflow-hidden shadow-sm">
+                    <div className="overflow-x-auto">
+                        <table className="w-full text-sm text-left">
+                            <thead className="bg-muted/50 text-muted-foreground text-xs uppercase font-semibold">
+                                <tr>
+                                    <th className="px-4 py-3 w-10">
+                                        <input
+                                            type="checkbox"
+                                            className="rounded border-muted-foreground/30 text-accent focus:ring-accent"
+                                            checked={selectedChargeIds.length === pendingCharges.length && pendingCharges.length > 0}
+                                            onChange={() => toggleAll(pendingCharges.map(c => c.id))}
+                                            disabled={pendingCharges.length === 0}
+                                        />
+                                    </th>
+                                    <th className="px-4 py-3">Descrição / Tipo</th>
+                                    <th className="px-4 py-3">Vencimento</th>
+                                    <th className="px-4 py-3">Valor</th>
+                                    <th className="px-4 py-3">Pago</th>
+                                    <th className="px-4 py-3">Status / Método</th>
+                                    <th className="px-4 py-3 text-right">Recibo</th>
+                                </tr>
+                            </thead>
+                            <tbody className="divide-y divide-border">
+                                {sortedCharges.map(c => (
+                                    <tr key={c.id} className={`hover:bg-muted/30 transition-colors ${selectedChargeIds.includes(c.id) ? "bg-accent/5" : ""}`}>
+                                        <td className="px-4 py-3">
+                                            {(c.status === "pending" || c.status === "late") && (
+                                                <input
+                                                    type="checkbox"
+                                                    className="rounded border-muted-foreground/30 text-accent focus:ring-accent cursor-pointer"
+                                                    checked={selectedChargeIds.includes(c.id)}
+                                                    onChange={() => toggleSelection(c.id)}
+                                                />
+                                            )}
+                                        </td>
+                                        <td className="px-4 py-3">
+                                            <div className="font-bold text-foreground text-[13px]">{c.description}</div>
+                                            <div className="text-[10px] text-muted-foreground uppercase font-medium tracking-tight">
+                                                {({ enrollment: "Matrícula", monthly: "Mensalidade", second_call: "2ª Chamada", final_exam: "Taxa de Prova", expense: "Despesa", other: "Outros" } as Record<string, string>)[c.type] || c.type}
+                                            </div>
+                                        </td>
+                                        <td className="px-4 py-3 text-muted-foreground">
+                                            {new Date(c.dueDate).toLocaleDateString("pt-BR")}
+                                        </td>
+                                        <td className="px-4 py-3 font-bold text-foreground">
+                                            R$ {c.amount.toFixed(2)}
+                                        </td>
+                                        <td className="px-4 py-3 font-medium text-green-600">
+                                            {c.actualPaidAmount ? `R$ ${c.actualPaidAmount.toFixed(2)}` : "-"}
+                                        </td>
+                                        <td className="px-4 py-3">
+                                            <div className="flex flex-col gap-1">
+                                                {getStatusBadge(c.status)}
+                                                {c.paymentMethod && (
+                                                    <span className="text-[9px] uppercase font-bold text-muted-foreground ml-1 flex items-center gap-1">
+                                                        {c.paymentMethod === 'pix' && <QrCode className="h-2 w-2" />}
+                                                        {c.paymentMethod === 'cartao' && <CreditCard className="h-2 w-2" />}
+                                                        {c.paymentMethod === 'dinheiro' && <DollarSign className="h-2 w-2" />}
+                                                        {c.paymentMethod}
+                                                    </span>
+                                                )}
+                                            </div>
+                                        </td>
+                                        <td className="px-4 py-3 text-right">
+                                            {c.status === "paid" && (
+                                                <button
+                                                    onClick={() => {
+                                                        const win = window.open('', '', 'width=700,height=800')
+                                                        if (win) {
+                                                            win.document.write(`
+                                                                <html>
+                                                                <head>
+                                                                    <meta charset="utf-8" />
+                                                                    <title>Recibo FATEC - ${c.description}</title>
+                                                                    <style>
+                                                                        @import url('https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700;800&display=swap');
+                                                                        
+                                                                        * { margin: 0; padding: 0; box-sizing: border-box; -webkit-print-color-adjust: exact; }
+                                                                        body { font-family: 'Plus Jakarta Sans', sans-serif; background-color: #f1f5f9; color: #0f172a; display: flex; justify-content: center; padding: 40px 20px; }
+                                                                        
+                                                                        .container { background: white; width: 100%; max-width: 550px; border-radius: 24px; box-shadow: 0 25px 50px -12px rgba(0, 0, 0, 0.1); position: relative; overflow: hidden; padding: 40px; }
+                                                                        
+                                                                        .accent-bar { position: absolute; top: 0; left: 0; right: 0; height: 8px; background: linear-gradient(90deg, #2563eb, #7c3aed, #db2777); }
+                                                                        .watermark { position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%) rotate(-30deg); font-size: 120px; font-weight: 900; color: rgba(15, 23, 42, 0.03); pointer-events: none; white-space: nowrap; }
+                                                                        
+                                                                        .header { text-align: center; margin-bottom: 40px; position: relative; }
+                                                                        .logo-container { width: 100px; height: 100px; background: white; border-radius: 20px; margin: 0 auto 20px; display: flex; align-items: center; justify-content: center; box-shadow: 0 10px 15px -3px rgba(0,0,0,0.1); border: 1px solid #f1f5f9; padding: 10px; }
+                                                                        .logo { width: 100%; height: auto; object-fit: contain; }
+                                                                        .brand-name { font-size: 28px; font-weight: 800; color: #1e293b; letter-spacing: -0.025em; margin-bottom: 4px; }
+                                                                        .brand-tagline { font-size: 11px; color: #64748b; font-weight: 600; text-transform: uppercase; letter-spacing: 0.1em; }
+                                                                        
+                                                                        .status-banner { background: #f0fdf4; border: 1px solid #bbf7d0; border-radius: 12px; padding: 12px; margin-bottom: 30px; display: flex; align-items: center; justify-content: center; gap: 10px; }
+                                                                        .status-dot { width: 8px; height: 8px; background: #22c55e; border-radius: 50%; }
+                                                                        .status-text { font-size: 12px; font-weight: 700; color: #166534; text-transform: uppercase; }
+                                                                        
+                                                                        .section-title { font-size: 10px; font-weight: 800; color: #94a3b8; text-transform: uppercase; letter-spacing: 0.05em; margin-bottom: 12px; display: flex; align-items: center; gap: 8px; }
+                                                                        .section-title::after { content: ""; flex: 1; height: 1px; background: #f1f5f9; }
+                                                                        
+                                                                        .detail-card { background: #f8fafc; border: 1px solid #f1f5f9; border-radius: 16px; padding: 24px; margin-bottom: 30px; }
+                                                                        .row { display: flex; justify-content: space-between; margin-bottom: 16px; border-bottom: 1px solid rgba(0,0,0,0.03); padding-bottom: 12px; }
+                                                                        .row:last-child { margin-bottom: 0; border-bottom: 0; padding-bottom: 0; }
+                                                                        
+                                                                        .label { font-size: 13px; color: #64748b; font-weight: 500; }
+                                                                        .value { font-size: 14px; color: #0f172a; font-weight: 700; text-align: right; }
+                                                                        
+                                                                        .amount-section { margin: 40px 0; padding: 30px; background: #1e293b; border-radius: 20px; color: white; display: flex; justify-content: space-between; align-items: center; box-shadow: 0 20px 25px -5px rgba(0, 0, 0, 0.1); }
+                                                                        .amount-label { font-size: 14px; font-weight: 600; color: #94a3b8; }
+                                                                        .amount-value { font-size: 32px; font-weight: 800; color: #38bdf8; }
+                                                                        
+                                                                        .footer { text-align: center; }
+                                                                        .footer-text { font-size: 12px; color: #64748b; line-height: 1.6; margin-bottom: 30px; }
+                                                                        
+                                                                        .btn-print { background: #2563eb; color: white; border: none; width: 100%; padding: 18px; border-radius: 14px; font-size: 15px; font-weight: 700; cursor: pointer; transition: all 0.3s ease; box-shadow: 0 4px 6px -1px rgba(37, 99, 235, 0.2); }
+                                                                        .btn-print:hover { background: #1d4ed8; transform: translateY(-2px); box-shadow: 0 10px 15px -3px rgba(37, 99, 235, 0.3); }
+                                                                        
+                                                                        @media print {
+                                                                            body { background: white; padding: 0; }
+                                                                            .container { box-shadow: none; max-width: 100%; border-radius: 0; padding: 20px; }
+                                                                            .btn-print { display: none; }
+                                                                        }
+                                                                    </style>
+                                                                </head>
+                                                                <body>
+                                                                    <div class="container">
+                                                                        <div class="accent-bar"></div>
+                                                                        <div class="watermark">PAGO</div>
+                                                                        
+                                                                        <div class="header">
+                                                                            <div class="logo-container">
+                                                                                <img src="/FATEC.png" alt="FATEC" class="logo" onerror="this.src='https://fatec.vercel.app/FATEC.png'" />
+                                                                            </div>
+                                                                            <h1 class="brand-name">FATEC</h1>
+                                                                            <p class="brand-tagline">Instituto Educacional de Teologia</p>
+                                                                        </div>
+                                                                        
+                                                                        <div class="status-banner">
+                                                                            <div class="status-dot"></div>
+                                                                            <span class="status-text">Pagamento Confirmado</span>
+                                                                        </div>
+                                                                        
+                                                                        <div class="section-title">Informações do Pagamento</div>
+                                                                        <div class="detail-card">
+                                                                            <div class="row">
+                                                                                <span class="label">Descrição</span>
+                                                                                <span class="value">${c.description}</span>
+                                                                            </div>
+                                                                            <div class="row">
+                                                                                <span class="label">Data de Pagamento</span>
+                                                                                <span class="value">${new Date(c.paymentDate!).toLocaleString('pt-BR', { dateStyle: 'long', timeStyle: 'short' })}</span>
+                                                                            </div>
+                                                                            <div class="row">
+                                                                                <span class="label">Método de Pagamento</span>
+                                                                                <span class="value" style="text-transform: uppercase;">${c.paymentMethod || "Não Informado"}</span>
+                                                                            </div>
+                                                                            <div class="row">
+                                                                                <span class="label">Código de Autenticação</span>
+                                                                                <span class="value" style="font-family: monospace; font-size: 11px;">#${c.id.slice(0, 8).toUpperCase()}</span>
+                                                                            </div>
+                                                                        </div>
+                                                                        
+                                                                        <div class="amount-section">
+                                                                            <span class="amount-label">Valor Total</span>
+                                                                            <span class="amount-value">R$ ${c.actualPaidAmount ? c.actualPaidAmount.toFixed(2) : c.amount.toFixed(2)}</span>
+                                                                        </div>
+                                                                        
+                                                                        <div class="footer">
+                                                                            <p class="footer-text">
+                                                                                Este documento é um comprovante digital oficial de quitação financeira perante ao FATEC. 
+                                                                                Em caso de dúvidas, entre em contato com nossa secretaria.
+                                                                            </p>
+                                                                            <button class="btn-print" onclick="window.print()">Imprimir Recibo</button>
+                                                                        </div>
+                                                                    </div>
+                                                                </body>
+                                                                </html>
+                                                            `)
+                                                        }
+                                                    }}
+                                                    className="text-[10px] font-bold bg-blue-50 text-blue-600 px-3 py-1.5 rounded-lg hover:bg-blue-100 transition-colors border border-blue-100"
+                                                >
+                                                    RECIBO
+                                                </button>
+                                            )}
+                                        </td>
+                                    </tr>
+                                ))}
+                            </tbody>
+                        </table>
+                    </div>
+                </div>
+            )}
+
+            {/* Sticky Action Footer */}
+            {selectedChargeIds.length > 0 && (
+                <div className="sticky bottom-0 -mx-4 md:-mx-8 w-[calc(100%+2rem)] md:w-[calc(100%+4rem)] bg-card border-t border-border shadow-[0_-10px_40px_rgba(0,0,0,0.15)] p-4 flex flex-col sm:flex-row items-center justify-between gap-4 z-40 animate-in slide-in-from-bottom-5 backdrop-blur-md bg-white/90">
+                    <div className="flex items-center gap-4">
+                        <div className="bg-accent/10 px-4 py-2 rounded-full border border-accent/20">
+                            <span className="font-black text-accent">{selectedChargeIds.length}</span> <span className="text-xs font-bold text-accent-foreground">ITEM(S)</span>
+                        </div>
+                        <div>
+                            <p className="text-[10px] text-muted-foreground font-black uppercase tracking-tighter">Total a Pagar</p>
+                            <div className="flex items-baseline gap-2">
+                                <p className="text-2xl font-black text-foreground leading-none">R$ {finalAmount.toFixed(2)}</p>
+                                {hasDiscount && (
+                                    <p className="text-[11px] font-bold text-green-600 bg-green-50 px-2 py-0.5 rounded-full animate-bounce">
+                                        Economize R$ {(totalSelectedAmount - finalAmount).toFixed(2)}!
+                                    </p>
+                                )}
+                            </div>
+                        </div>
+                    </div>
+                    <div className="flex items-center gap-3">
+                        <Button variant="ghost" onClick={() => setSelectedChargeIds([])} className="h-10 text-xs font-bold uppercase">Limpar</Button>
+                        <Button
+                            onClick={() => setShowPayModal(true)}
+                            className="h-12 px-8 bg-accent text-accent-foreground font-black rounded-xl shadow-lg hover:shadow-xl hover:translate-y-[-2px] transition-all text-sm uppercase tracking-wider"
+                        >
+                            Pagar Agora
+                        </Button>
+                    </div>
+                </div>
+            )}
+            
+            {/* Bottom padding to avoid bar overlap when not sticking */}
+            <div className="h-20" />
+        </div>
+    )
+}
