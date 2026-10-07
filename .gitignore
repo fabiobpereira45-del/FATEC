@@ -11,3 +11,5 @@ node_modules/
 .vercel
 _tmp*
 *.tsbuildinfo
+env.txt
+.env*

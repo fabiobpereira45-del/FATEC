@@ -235,7 +235,6 @@ export function clearSelectedPolo(): void {
 
 export const MASTER_CREDENTIALS = {
   email: "professor@fatec.com",
-  password: "fatec123",
   name: "Pb. Fábio Barreto",
   role: "master" as const,
 }
@@ -2152,9 +2151,6 @@ export async function deleteProfessorAccount(id: string): Promise<void> {
 }
 
 export async function authenticateProfessor(email: string, password: string): Promise<ProfessorAccount | "master" | null> {
-  if (email.trim().toLowerCase() === MASTER_CREDENTIALS.email && password === MASTER_CREDENTIALS.password) {
-    return "master"
-  }
   const supabase = createClient()
   const { data } = await supabase.from('professor_accounts').select('*').eq('email', email.trim().toLowerCase()).maybeSingle()
   if (data) {

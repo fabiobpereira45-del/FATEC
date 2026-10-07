@@ -5,8 +5,8 @@ import { BookOpen, Eye, EyeOff, Lock, Mail, UserPlus, LogIn, ArrowLeft, KeyRound
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
-import { createClient } from "@/lib/supabase/client"
-import { saveProfessorSession, MASTER_CREDENTIALS, ensureProfessorSync, getProfessorByEmail } from "@/lib/store"
+import { authClient } from "@/lib/auth-client"
+import { saveProfessorSession } from "@/lib/store"
 
 interface Props {
   onLogin: () => void
@@ -23,7 +23,6 @@ export function ProfessorLogin({ onLogin, onBack }: Props) {
   const [error, setError] = useState("")
   const [message, setMessage] = useState("")
   const [loading, setLoading] = useState(false)
-  const supabase = createClient()
 
   function reset() {
     setError("")
@@ -36,19 +35,7 @@ export function ProfessorLogin({ onLogin, onBack }: Props) {
     e.preventDefault()
     setError("")
     setMessage("")
-    if (!email.trim()) { setError("Informe o e-mail."); return }
-    setLoading(true)
-    try {
-      const { error: err } = await supabase.auth.resetPasswordForEmail(email.trim(), {
-        redirectTo: `${window.location.origin}/reset-password`
-      })
-      if (err) throw err
-      setMessage("E-mail de recuperação enviado! Verifique sua caixa de entrada.")
-    } catch (err: any) {
-      setError(err.message || "Erro ao enviar e-mail.")
-    } finally {
-      setLoading(false)
-    }
+    setError("A recuperação de senha ainda não está disponível. Peça ao master para redefinir seu acesso.")
   }
 
   async function handleSubmit(e: React.FormEvent) {
@@ -59,59 +46,23 @@ export function ProfessorLogin({ onLogin, onBack }: Props) {
     try {
       if (isSignUp) {
         if (!name.trim()) { setError("O nome é obrigatório para o cadastro."); setLoading(false); return }
-        const { data, error: signUpError } = await supabase.auth.signUp({
-          email, password, options: { data: { full_name: name, role: "professor" } }
-        })
-        if (signUpError) throw signUpError
-        if (data.session) {
-          saveProfessorSession(data.user!.id, data.user!.user_metadata.role || "professor")
-          onLogin()
-        } else {
-          setMessage("Cadastro realizado! Verifique seu e-mail para confirmar a conta.")
-          setIsSignUp(false)
-        }
+        // Cadastro público cria conta de aluno (sem acesso à área de professores).
+        // Professores são criados pelo master.
+        const { error: signUpError } = await authClient.signUp.email({ email, password, name })
+        if (signUpError) throw new Error(signUpError.message || "Não foi possível criar a conta.")
+        setMessage("Conta criada. O acesso à área de professores deve ser liberado pelo master.")
+        setIsSignUp(false)
       } else {
-        const normalizedEmail = email.toLowerCase().trim()
-        const isHardcodedMaster = normalizedEmail === MASTER_CREDENTIALS.email || normalizedEmail === "professor@fatec.com"
-        
-        if (isHardcodedMaster && password === MASTER_CREDENTIALS.password) {
-            // Check if account exists in DB first to get photo, etc.
-            const dbProfile = await getProfessorByEmail(normalizedEmail)
-            const finalAvatar = dbProfile?.avatar_url || null
-            saveProfessorSession("master", "master", finalAvatar)
-            onLogin()
-            return
+        const { data, error: signInError } = await authClient.signIn.email({ email: email.trim(), password })
+        if (signInError) throw new Error(signInError.message || "E-mail ou senha inválidos.")
+        const user = data?.user as { id: string; role?: string } | undefined
+        const role = user?.role
+        if (!user || (role !== "master" && role !== "professor" && role !== "secretary")) {
+          await authClient.signOut()
+          throw new Error("Acesso negado. Esta área é restrita a professores e secretários.")
         }
-        const { data, error: signInError } = await supabase.auth.signInWithPassword({ email, password })
-        if (signInError) throw signInError
-        if (data.session) {
-          // Fetch full profile from DB to seed the session correctly
-          const authRole = data.user.user_metadata?.role || data.user.user_metadata?.type
-          let finalRole = authRole
-          let finalId = data.user.id
-          let finalAvatar = null
-          
-          if (data.user.email) {
-            const dbProfile = await getProfessorByEmail(data.user.email)
-            if (dbProfile) {
-                finalId = dbProfile.id // Use DB ID instead of Auth UUID
-                finalRole = dbProfile.role
-                finalAvatar = dbProfile?.avatar_url || null
-            }
-          }
-
-          if (finalRole !== "master" && finalRole !== "professor" && finalRole !== "secretary") {
-            await supabase.auth.signOut()
-            throw new Error("Acesso negado. Esta área é restrita a professores e secretários.")
-          }
-
-          saveProfessorSession(finalId, finalRole, finalAvatar)
-          // Sync ID with professor_accounts table
-          if (data.user.email) {
-            await ensureProfessorSync(data.user.email, data.user.id)
-          }
-          onLogin()
-        }
+        saveProfessorSession(user.id, role as "master" | "professor" | "secretary", null)
+        onLogin()
       }
     } catch (err: any) {
       setError(err.message || "Ocorreu um erro na autenticação.")
