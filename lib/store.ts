@@ -2,6 +2,7 @@ import { createClient } from "@/lib/supabase/client"
 // CACHE-BUSTER: v1.2.2-cloud - 2026-03-13 19:26
 import { triggerN8nWebhook } from "@/lib/n8n"
 import { BRAND } from "@/lib/brand"
+import { apiRequest } from "@/lib/api-client"
 export { triggerN8nWebhook }
 
 // ─── Types ────────────────────────────────────────────────────────────────────
@@ -1030,29 +1031,7 @@ export async function deleteSemester(id: string): Promise<void> {
 }
 
 export async function getDisciplines(): Promise<Discipline[]> {
-  const supabase = createClient()
-  const [dRes, sRes] = await Promise.all([
-    supabase.from('disciplines').select('*'),
-    supabase.from('semesters').select('id, name, order')
-  ])
-  
-  const semesters = sRes.data || []
-
-  return (dRes.data || [])
-    .map((d: any) => {
-      const disc = mapDiscipline(d)
-      const sem = semesters.find((s: any) => s.id === disc.semesterId)
-      return {
-        ...disc,
-        semesterOrder: sem?.order ?? 999,
-        semesterName: sem?.name || ''
-      }
-    })
-    .sort((a: any, b: any) => {
-      if (a.semesterOrder !== b.semesterOrder) return (a.semesterOrder ?? 999) - (b.semesterOrder ?? 999)
-      if (a.order !== b.order) return a.order - b.order
-      return new Date(a.createdAt).getTime() - new Date(b.createdAt).getTime()
-    })
+  return apiRequest<Discipline[]>('/api/disciplines')
 }
 
 export async function getDisciplinesByProfessor(professorId: string): Promise<Discipline[]> {
@@ -1498,123 +1477,21 @@ export async function addDiscipline(
   applicationYear?: string | null,
   isConcluded?: boolean
 ): Promise<Discipline> {
-  const supabase = createClient()
-  let poloId: string | null = null
-  if (semesterId) {
-    const { data: sem } = await supabase.from('semesters').select('polo_id').eq('id', semesterId).maybeSingle()
-    poloId = sem?.polo_id ?? null
-  }
-  const d = {
-    id: uid(),
-    name,
-    description: description || null,
-    semester_id: semesterId || null,
-    polo_id: poloId,
-    professor_name: professorName || null,
-    day_of_week: dayOfWeek || null,
-    shift: shift || null,
-    "order": order || 0,
-    application_month: applicationMonth || null,
-    application_year: applicationYear || null,
-    is_concluded: isConcluded || false,
-    created_at: new Date().toISOString()
-  }
-  const { data, error } = await supabase.from('disciplines').insert(d).select().single()
-  if (error) {
-    console.error("Error adding discipline:", error)
-    throw new Error(`Falha ao adicionar disciplina: ${error.message}`)
-  }
-  console.log("Discipline added successfully:", data.id)
-  return mapDiscipline(data)
+  return apiRequest<Discipline>('/api/disciplines', 'POST', {
+    name, description, semesterId, professorName, dayOfWeek, shift,
+    order, applicationMonth, applicationYear, isConcluded,
+  })
 }
 
 export async function updateDisciplineOrder(items: { id: string; order: number }[]): Promise<void> {
-  const supabase = createClient()
-  await Promise.all(
-    items.map(item =>
-      supabase.from('disciplines').update({ order: item.order }).eq('id', item.id)
-    )
-  )
+  await apiRequest('/api/disciplines/reorder', 'POST', { items })
 }
 
 export async function updateDiscipline(id: string, data: Partial<Pick<Discipline, "name" | "description" | "semesterId" | "professorName" | "dayOfWeek" | "shift" | "order" | "applicationMonth" | "applicationYear" | "isConcluded">>): Promise<void> {
-  const supabase = createClient()
-
-  const updateData: any = {}
-  if (data.name !== undefined) updateData.name = data.name
-  if (data.description !== undefined) updateData.description = data.description || null
-  if (data.semesterId !== undefined) {
-    updateData.semester_id = data.semesterId || null
-    if (data.semesterId) {
-      const { data: sem } = await supabase.from('semesters').select('polo_id').eq('id', data.semesterId).maybeSingle()
-      updateData.polo_id = sem?.polo_id ?? null
-    } else {
-      updateData.polo_id = null
-    }
-  }
-  if (data.professorName !== undefined) updateData.professor_name = data.professorName || null
-  if (data.dayOfWeek !== undefined) updateData.day_of_week = data.dayOfWeek || null
-  if (data.shift !== undefined) updateData.shift = data.shift || null
-  if (data.order !== undefined) updateData.order = data.order
-  if (data.applicationMonth !== undefined) updateData.application_month = data.applicationMonth || null
-  if (data.applicationYear !== undefined) updateData.application_year = data.applicationYear || null
-  if (data.isConcluded !== undefined) updateData.is_concluded = data.isConcluded
-
-  const { error, count } = await supabase.from('disciplines').update(updateData).eq('id', id).select('id', { count: 'exact' })
-
-  if (error) {
-    console.error("Error updating discipline:", error)
-    throw new Error(`Falha ao atualizar disciplina: ${error.message}`)
-  }
-
-  // Only check/propagate financial charges IF name, month, or year was explicitly changed
-  const hasFinancialRelevantChange = data.name !== undefined || data.applicationMonth !== undefined || data.applicationYear !== undefined
-  if (hasFinancialRelevantChange) {
-    const { data: currentDisc } = await supabase.from('disciplines').select('name, application_month, application_year').eq('id', id).maybeSingle()
-    const newName = data.name !== undefined ? data.name : currentDisc?.name
-    const finalMonth = data.applicationMonth !== undefined ? data.applicationMonth : currentDisc?.application_month
-    const finalYear = data.applicationYear !== undefined ? data.applicationYear : currentDisc?.application_year
-
-    if (finalMonth && finalYear) {
-      const monthMap: Record<string, number> = {
-        'Jan': 1, 'Fev': 2, 'Mar': 3, 'Abr': 4, 'Mai': 5, 'Jun': 6,
-        'Jul': 7, 'Ago': 8, 'Set': 9, 'Out': 10, 'Nov': 11, 'Dez': 12
-      }
-      let monthNum = 1
-      if (monthMap[finalMonth]) {
-        monthNum = monthMap[finalMonth]
-      } else {
-        monthNum = parseInt(finalMonth) || 1
-      }
-      const year = parseInt(finalYear || "2026")
-      const newDueDate = new Date(year, monthNum - 1, 10).toISOString().split('T')[0]
-
-      const chargeUpdate: any = {
-        due_date: newDueDate,
-        discipline_id: id
-      }
-      if (newName) {
-        chargeUpdate.description = `Mensalidade: ${newName}`
-      }
-
-      // Update by discipline_id
-      await supabase.from('financial_charges')
-        .update(chargeUpdate)
-        .eq('discipline_id', id)
-        .eq('type', 'monthly')
-    }
-  }
-
-  console.log(`Discipline ${id} updated status. Rows affected: ${count}`)
+  await apiRequest(`/api/disciplines/${id}`, 'PATCH', data)
 }
 export async function deleteDiscipline(id: string): Promise<void> {
-  const supabase = createClient()
-  // First, delete related entries to avoid foreign key constraints
-  await supabase.from('questions').delete().eq('discipline_id', id)
-  await supabase.from('study_materials').delete().eq('discipline_id', id)
-  await supabase.from('financial_charges').delete().eq('discipline_id', id)
-  const { error } = await supabase.from('disciplines').delete().eq('id', id)
-  if (error) throw new Error(error.message)
+  await apiRequest(`/api/disciplines/${id}`, 'DELETE')
 }
 
 export async function getStudyMaterials(disciplineId?: string): Promise<StudyMaterial[]> {
