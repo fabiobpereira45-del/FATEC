@@ -1439,128 +1439,34 @@ export async function deleteStudyMaterial(id: string): Promise<void> {
 }
 
 export async function getQuestions(): Promise<Question[]> {
-  const supabase = createClient()
-  const { data } = await supabase.from('questions').select('*')
-  return (data || []).map(mapQuestion)
+  return apiRequest<Question[]>('/api/questions')
 }
 export async function getQuestionsByDiscipline(disciplineId: string): Promise<Question[]> {
-  const supabase = createClient()
-  const { data } = await supabase.from('questions').select('*').eq('discipline_id', disciplineId)
-  return (data || []).map(mapQuestion)
+  return apiRequest<Question[]>(`/api/questions?disciplineId=${disciplineId}`)
 }
 
 export async function getDisciplineQuestionCounts(): Promise<Record<string, number>> {
-  const supabase = createClient()
-  const { data } = await supabase.from('questions').select('discipline_id')
-  const counts: Record<string, number> = {}
-  if (data) {
-    for (const q of data) {
-      counts[q.discipline_id] = (counts[q.discipline_id] || 0) + 1
-    }
-  }
-  return counts
+  return apiRequest<Record<string, number>>('/api/questions/counts')
 }
 export async function addQuestion(data: Omit<Question, "id" | "createdAt">): Promise<Question> {
-  const q: any = {
-    id: uid(),
-    discipline_id: data.disciplineId,
-    type: data.type,
-    text: data.text,
-    choices: data.choices,
-    correct_answer: data.correctAnswer,
-    points: data.points,
-    created_at: new Date().toISOString()
-  }
-  // Store pairs inside choices since DB column might be missing
-  if (data.pairs && data.pairs.length > 0) {
-    q.choices = { options: data.choices || [], matchingPairs: data.pairs }
-  }
-
-  const supabase = createClient()
-  const { error } = await supabase.from('questions').insert(q)
-  if (error) throw new Error(`Erro ao salvar questão: ${error.message}`)
-
-  // Create a proper Question object for the return
-  return mapQuestion({
-    ...q,
-    discipline_id: q.discipline_id,
-    correct_answer: q.correct_answer,
-    created_at: q.created_at
-  })
+  return apiRequest<Question>('/api/questions', 'POST', data)
 }
 
 export async function addQuestionsBatch(questions: Omit<Question, "id" | "createdAt">[]): Promise<string[]> {
-  const supabase = createClient()
-  const dbRows = questions.map(q => {
-    const id = uid()
-    const row: any = {
-      id,
-      discipline_id: q.disciplineId,
-      type: q.type,
-      text: q.text,
-      choices: q.choices,
-      correct_answer: q.correctAnswer,
-      points: q.points,
-      created_at: new Date().toISOString()
-    }
-    
-    // Support matching pairs inside choices object
-    if (q.pairs && q.pairs.length > 0) {
-      row.choices = { options: q.choices || [], matchingPairs: q.pairs }
-    }
-    
-    return row
-  })
-
-  const { error } = await supabase.from('questions').insert(dbRows)
-  if (error) throw new Error(`Erro ao salvar lote de questões: ${error.message}`)
-  
-  return dbRows.map(r => r.id)
+  return apiRequest<string[]>('/api/questions/batch', 'POST', { questions })
 }
 export async function updateQuestion(id: string, data: Partial<Omit<Question, "id" | "createdAt">>): Promise<void> {
-  const updateData: any = {}
-  if (data.disciplineId !== undefined) updateData.discipline_id = data.disciplineId
-  if (data.type !== undefined) updateData.type = data.type
-  if (data.text !== undefined) updateData.text = data.text
-  if (data.points !== undefined) updateData.points = data.points
-
-  if (data.choices !== undefined || data.pairs !== undefined) {
-    const finalChoices = data.choices || []
-    const finalPairs = data.pairs || []
-    if (finalPairs.length > 0) {
-      updateData.choices = { options: finalChoices, matchingPairs: finalPairs }
-      // Explicitly avoid sending pairs column
-    } else {
-      updateData.choices = finalChoices
-    }
-  }
-
-  const supabase = createClient()
-  const { error } = await supabase.from('questions').update(updateData).eq('id', id)
-  if (error) throw new Error(`Erro ao atualizar questão: ${error.message}`)
+  await apiRequest(`/api/questions/${id}`, 'PATCH', data)
 }
 export async function deleteQuestion(id: string): Promise<void> {
-  const supabase = createClient()
-  await supabase.from('questions').delete().eq('id', id)
+  await apiRequest(`/api/questions/${id}`, 'DELETE')
 }
 
 export async function getAssessments(poloId?: string): Promise<Assessment[]> {
-  const supabase = createClient()
-  let query = supabase.from('assessments')
-    .select('id, title, discipline_id, professor, institution, question_ids, points_per_question, total_points, open_at, close_at, is_published, shuffle_variants, rules, release_results, modality, created_at, time_limit_minutes, polo_id')
-    .order('created_at', { ascending: false })
-  if (poloId && poloId !== 'all') query = query.eq('polo_id', poloId)
-  const { data, error } = await query
-  if (error) {
-    console.error("Error fetching assessments:", error)
-    return []
-  }
-  return (data || []).map(mapAssessment)
+  return apiRequest<Assessment[]>('/api/assessments')
 }
 export async function getAssessmentById(id: string): Promise<Assessment | null> {
-  const supabase = createClient()
-  const { data, error } = await supabase.from('assessments').select('*').eq('id', id).single()
-  return data ? mapAssessment(data) : null
+  return apiRequest<Assessment | null>(`/api/assessments/${id}`).catch(() => null)
 }
 export async function getActiveAssessment(assessmentId?: string): Promise<Assessment | null> {
   if (assessmentId) {
@@ -1571,82 +1477,13 @@ export async function getActiveAssessment(assessmentId?: string): Promise<Assess
   return assessments[0] ?? null
 }
 export async function addAssessment(data: Omit<Assessment, "id" | "createdAt" | "releaseResults" | "archived">): Promise<Assessment> {
-  const a = { ...data, id: uid(), createdAt: new Date().toISOString(), releaseResults: false, archived: false }
-  const dbData = { id: a.id, title: a.title, discipline_id: a.disciplineId, professor: a.professor, institution: a.institution, question_ids: a.questionIds, points_per_question: a.pointsPerQuestion, total_points: a.totalPoints, open_at: a.openAt, close_at: a.closeAt, is_published: a.isPublished, shuffle_variants: a.shuffleVariants, time_limit_minutes: a.timeLimitMinutes, logo_base64: a.logoBase64, rules: a.rules, release_results: a.releaseResults, modality: a.modality ?? "public", is_final_exam: a.isFinalExam ?? false, created_at: a.createdAt }
-  const supabase = createClient()
-  let { error } = await supabase.from('assessments').insert(dbData)
-  // Fallback para bancos ainda sem a coluna is_final_exam
-  if (error && /is_final_exam/i.test(error.message)) {
-    const { is_final_exam: _omit, ...dbFallback } = dbData as any
-    const retry = await supabase.from('assessments').insert(dbFallback)
-    error = retry.error
-  }
-  if (error) throw new Error(error.message)
-  return a
+  return apiRequest<Assessment>('/api/assessments', 'POST', data)
 }
 export async function updateAssessment(id: string, data: Partial<Omit<Assessment, "id" | "createdAt">>): Promise<void> {
-  const dbData: any = {}
-  if (data.title !== undefined) dbData.title = data.title
-  if (data.disciplineId !== undefined) dbData.discipline_id = data.disciplineId
-  if (data.professor !== undefined) dbData.professor = data.professor
-  if (data.institution !== undefined) dbData.institution = data.institution
-  if (data.questionIds !== undefined) dbData.question_ids = data.questionIds
-  if (data.pointsPerQuestion !== undefined) dbData.points_per_question = data.pointsPerQuestion
-  if (data.totalPoints !== undefined) dbData.total_points = data.totalPoints
-  if (data.openAt !== undefined) dbData.open_at = data.openAt
-  if (data.closeAt !== undefined) dbData.close_at = data.closeAt
-  if (data.isPublished !== undefined) dbData.is_published = data.isPublished
-  if (data.shuffleVariants !== undefined) dbData.shuffle_variants = data.shuffleVariants
-  if (data.logoBase64 !== undefined) dbData.logo_base64 = data.logoBase64
-  if (data.rules !== undefined) dbData.rules = data.rules
-  if (data.releaseResults !== undefined) dbData.release_results = data.releaseResults
-  if (data.timeLimitMinutes !== undefined) dbData.time_limit_minutes = data.timeLimitMinutes
-  if (data.isFinalExam !== undefined) dbData.is_final_exam = data.isFinalExam
-
-  const supabase = createClient()
-
-  // Workaround for missing 'archived' column
-  if (data.archived !== undefined || data.modality !== undefined) {
-    const { data: current } = await supabase.from('assessments').select('modality').eq('id', id).maybeSingle()
-    const currentModality = (current?.modality || "public").replace("_archived", "")
-    const newModalityBase = data.modality || currentModality
-    const newArchived = data.archived !== undefined ? data.archived : (current?.modality?.includes("_archived") || false)
-
-    dbData.modality = newArchived ? `${newModalityBase}_archived` : newModalityBase
-  }
-  const { error } = await supabase.from('assessments').update(dbData).eq('id', id)
-  if (error) {
-    // Fallback para bancos ainda sem a coluna is_final_exam
-    if (/is_final_exam/i.test(error.message) && 'is_final_exam' in dbData) {
-      delete (dbData as any).is_final_exam
-      const retry = await supabase.from('assessments').update(dbData).eq('id', id)
-      if (retry.error) throw new Error(retry.error.message)
-    } else {
-      throw new Error(error.message)
-    }
-  }
-
-  // Trigger n8n if published
-  if (data.isPublished === true) {
-    try {
-      const { data: assessment } = await supabase.from('assessments').select('title, discipline_id').eq('id', id).maybeSingle()
-      if (assessment) {
-        const { data: discipline } = await supabase.from('disciplines').select('name').eq('id', assessment.discipline_id).maybeSingle()
-        triggerN8nWebhook('prova_publicada', {
-          type: 'assessment',
-          assessmentTitle: assessment.title,
-          disciplineName: discipline?.name || 'Disciplina',
-          assessmentId: id
-        });
-      }
-    } catch (err) {
-      console.error("Erro ao disparar WhatsApp n8n de prova:", err);
-    }
-  }
+  await apiRequest(`/api/assessments/${id}`, 'PATCH', data)
 }
 export async function deleteAssessment(id: string): Promise<void> {
-  const supabase = createClient()
-  await supabase.from('assessments').delete().eq('id', id)
+  await apiRequest(`/api/assessments/${id}`, 'DELETE')
 }
 
 export async function getSubmissions(): Promise<StudentSubmission[]> {
