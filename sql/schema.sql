@@ -197,7 +197,7 @@ CREATE TABLE assessments (
 CREATE TABLE student_submissions (
   id                    uuid PRIMARY KEY DEFAULT gen_random_uuid(),
   assessment_id         uuid NOT NULL REFERENCES assessments(id) ON DELETE CASCADE,
-  student_id            uuid NOT NULL REFERENCES students(id) ON DELETE CASCADE,
+  student_id            uuid REFERENCES students(id) ON DELETE CASCADE, -- nulo: prova pública identificada só por e-mail
   student_name          text,
   student_email         text,
   answers               jsonb NOT NULL DEFAULT '[]'::jsonb,
@@ -227,7 +227,7 @@ CREATE TABLE student_grades (
 );
 
 CREATE TABLE grade_settings (
-  id              uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  id              text PRIMARY KEY DEFAULT 'global', -- linha única de configuração global
   exam_weight     numeric(6,2) NOT NULL DEFAULT 0,
   test_weight     numeric(6,2) NOT NULL DEFAULT 0,
   work_weight     numeric(6,2) NOT NULL DEFAULT 0,

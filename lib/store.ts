@@ -681,46 +681,11 @@ export async function updateAsaasConfig(config: Omit<AsaasConfig, "id" | "update
 }
 
 export async function getGradeSettings(): Promise<GradeSettings> {
-  const supabase = createClient()
-  try {
-    const { data, error } = await supabase.from('grade_settings').select('*').eq('id', 'global').maybeSingle()
-    if (error || !data) throw new Error("Not found")
-    
-    return {
-      examWeight: Number(data.exam_weight || 10),
-      testWeight: Number(data.test_weight || 0),
-      workWeight: Number(data.work_weight || 0),
-      bonusWeight: Number(data.bonus_weight || 0),
-      presenceValue: Number(data.presence_value || 0.5),
-      divisor: Number(data.divisor || 2),
-      updatedAt: data.updated_at
-    }
-  } catch (err) {
-    return {
-      examWeight: 10,
-      testWeight: 0,
-      workWeight: 0,
-      bonusWeight: 0,
-      presenceValue: 0.5,
-      divisor: 2,
-      updatedAt: new Date().toISOString()
-    }
-  }
+  return apiRequest<GradeSettings>('/api/grade-settings')
 }
 
 export async function saveGradeSettings(settings: GradeSettings): Promise<void> {
-  const supabase = createClient()
-  const { error } = await supabase.from('grade_settings').upsert({
-    id: 'global',
-    exam_weight: settings.examWeight,
-    test_weight: settings.testWeight,
-    work_weight: settings.workWeight,
-    bonus_weight: settings.bonusWeight,
-    presence_value: settings.presenceValue,
-    divisor: settings.divisor,
-    updated_at: new Date().toISOString()
-  })
-  if (error) throw new Error(error.message)
+  await apiRequest('/api/grade-settings', 'POST', settings)
 }
 
 export async function getClasses(poloId?: string): Promise<ClassRoom[]> {
@@ -1487,113 +1452,27 @@ export async function deleteAssessment(id: string): Promise<void> {
 }
 
 export async function getSubmissions(): Promise<StudentSubmission[]> {
-  const supabase = createClient()
-  const { data } = await supabase.from('student_submissions').select('*')
-  return (data || []).map(mapSubmission)
+  return apiRequest<StudentSubmission[]>('/api/submissions')
 }
 export async function getSubmissionsByAssessment(assessmentId: string): Promise<StudentSubmission[]> {
-  const supabase = createClient()
-  const { data } = await supabase.from('student_submissions').select('*').eq('assessment_id', assessmentId)
-  return (data || []).map(mapSubmission)
+  return apiRequest<StudentSubmission[]>(`/api/submissions?assessmentId=${assessmentId}`)
 }
 export async function saveSubmission(sub: StudentSubmission): Promise<StudentSubmission> {
-  const supabase = createClient()
-
-  // student_id é uma coluna uuid. A prova pública identifica o aluno pelo e-mail
-  // digitado, que não é uuid e faria o insert falhar (22P02). Nesse caso gravamos
-  // null — o e-mail continua preservado em student_email.
-  const isUuid = (v?: string) =>
-    /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(String(v || ""))
-
-  const record = {
-    id: sub.id,
-    assessment_id: sub.assessmentId,
-    student_id: isUuid(sub.studentId) ? sub.studentId : null,
-    student_name: sub.studentName,
-    student_email: sub.studentEmail,
-    answers: sub.answers,
-    score: sub.score,
-    total_points: sub.totalPoints,
-    percentage: sub.percentage,
-    submitted_at: sub.submittedAt,
-    time_elapsed_seconds: sub.timeElapsedSeconds,
-    focus_lost_count: sub.focusLostCount || 0
-  }
-
-  const { data, error } = await supabase.from('student_submissions').insert(record).select().single()
-  if (error) throw new Error(error.message)
-  const result = mapSubmission(data)
-
-  // --- AUTOMATIC GRADE MIGRATION ---
-  try {
-    // Attempt to find student by email
-    const { data: student } = await supabase.from('students').select('name').eq('email', sub.studentEmail).maybeSingle();
-
-    if (student) {
-      const { data: existingGrade } = await supabase.from('student_grades')
-        .select('id')
-        .match({ student_identifier: sub.studentEmail, discipline_id: sub.assessmentId ? (await getAssessmentById(sub.assessmentId))?.disciplineId : null })
-        .maybeSingle();
-
-      const assessment = await getAssessmentById(sub.assessmentId);
-      const disciplineId = assessment?.disciplineId || null;
-
-      const gradeData = {
-        student_identifier: sub.studentEmail,
-        student_name: sub.studentName,
-        discipline_id: disciplineId,
-        exam_grade: sub.score,
-        is_public: false // Hidden until professor releases
-      };
-
-      if (existingGrade) {
-        await supabase.from('student_grades').update(gradeData).eq('id', existingGrade.id);
-      } else {
-        await supabase.from('student_grades').insert({ ...gradeData, created_at: new Date().toISOString() });
-      }
-    }
-  } catch (err) {
-    console.error("Erro ao migrar nota da prova para o boletim:", err);
-  }
-
-  // Trigger n8n WhatsApp (Exam Completed)
-  try {
-    const assessment = await getAssessmentById(sub.assessmentId);
-    if (assessment) {
-      triggerN8nWebhook('prova_concluida', {
-        type: 'exam_completion',
-        name: sub.studentName,
-        phone: sub.studentEmail.split('@')[0], // Fallback/Identifier
-        title: assessment.title,
-        score: sub.score,
-        totalPoints: sub.totalPoints
-      });
-    }
-  } catch (err) {
-    console.error("Erro ao disparar WhatsApp n8n de conclusão de prova:", err);
-  }
-
-  return result
+  return apiRequest<StudentSubmission>('/api/submissions', 'POST', sub)
 }
 export async function updateSubmissionScore(id: string, score: number, totalPoints: number): Promise<void> {
-  const supabase = createClient()
-  const percentage = totalPoints > 0 ? (score / totalPoints) * 100 : 0
-  const { error } = await supabase.from('student_submissions').update({ score, percentage }).eq('id', id)
-  if (error) throw new Error(error.message)
+  await apiRequest(`/api/submissions/${id}`, 'PATCH', { score, totalPoints })
 }
 export async function deleteSubmission(id: string): Promise<void> {
-  const supabase = createClient()
-  await supabase.from('student_submissions').delete().eq('id', id)
+  await apiRequest(`/api/submissions/${id}`, 'DELETE')
 }
 export async function hasStudentSubmitted(email: string, assessmentId: string): Promise<boolean> {
-  const supabase = createClient()
-  const { count } = await supabase.from('student_submissions').select('*', { count: 'exact', head: true }).match({ assessment_id: assessmentId, student_email: email })
-  return (count || 0) > 0
+  const r = await apiRequest<{ result: boolean }>(`/api/submissions/check?email=${encodeURIComponent(email)}&assessmentId=${assessmentId}`)
+  return r.result
 }
 export async function getSubmissionByEmailAndAssessment(email: string, assessmentId: string): Promise<StudentSubmission | null> {
-  const supabase = createClient()
-  const { data } = await supabase.from('student_submissions').select('*').match({ assessment_id: assessmentId, student_email: email }).maybeSingle()
-  return data ? mapSubmission(data) : null
+  const r = await apiRequest<{ result: StudentSubmission | null }>(`/api/submissions/check?email=${encodeURIComponent(email)}&assessmentId=${assessmentId}&full=1`)
+  return r.result
 }
 
 export async function getProfessorAccounts(): Promise<ProfessorAccount[]> {
@@ -2321,16 +2200,7 @@ export async function unlockAttendance(id: string): Promise<void> {
 // ─── Notas (Student Grades) ───────────────────────────────────────────
 
 export async function getStudentGrades(poloId?: string): Promise<StudentGrade[]> {
-  const supabase = createClient()
-  let query = supabase
-    .from('student_grades')
-    .select('id, student_identifier, student_name, discipline_id, is_public, exam_grade, works_grade, seminar_grade, participation_bonus, attendance_score, custom_divisor, created_at, student_id, polo_id')
-    .order('created_at', { ascending: false })
-    .limit(500)
-  if (poloId && poloId !== 'all') query = query.eq('polo_id', poloId)
-  const { data, error } = await query
-  if (error) throw new Error(error.message)
-  return (data || []).map(mapStudentGrade)
+  return apiRequest<StudentGrade[]>('/api/grades')
 }
 
 /**
@@ -2402,40 +2272,7 @@ export async function getStudentAttendances(studentId: string): Promise<Attendan
 }
 
 export async function saveStudentGrade(grade: Omit<StudentGrade, 'id' | 'createdAt'>, id?: string): Promise<void> {
-  const supabase = createClient()
-  let student_id = grade.studentId || grade.student_id || null
-
-  // Auto-link ID if missing but identifier exists
-  if (!student_id && grade.studentIdentifier) {
-    const cleanId = grade.studentIdentifier.replace(/\D/g, '')
-    const { data: std } = await supabase.from('students')
-      .select('id')
-      .or(`cpf.eq.${cleanId},email.eq.${grade.studentIdentifier},enrollment_number.eq.${grade.studentIdentifier}`)
-      .maybeSingle()
-    if (std) student_id = std.id
-  }
-
-  const dbData: any = {
-    student_id: student_id,
-    student_identifier: grade.studentIdentifier,
-    student_name: grade.studentName,
-    discipline_id: grade.disciplineId || null,
-    is_public: grade.isPublic,
-    exam_grade: grade.examGrade,
-    works_grade: grade.worksGrade,
-    seminar_grade: grade.seminarGrade,
-    participation_bonus: grade.participationBonus,
-    attendance_score: grade.attendanceScore,
-    custom_divisor: grade.customDivisor,
-  }
-
-  if (id) {
-    const { error } = await supabase.from('student_grades').update(dbData).eq('id', id)
-    if (error) throw new Error(error.message)
-  } else {
-    const { error } = await supabase.from('student_grades').insert({ ...dbData, created_at: new Date().toISOString() })
-    if (error) throw new Error(error.message)
-  }
+  await apiRequest('/api/grades', 'POST', { grade, id })
 }
 
 export async function getAvailableSlots(): Promise<number> {
@@ -2471,90 +2308,15 @@ export async function getAvailableSlots(): Promise<number> {
 
 
 export async function deleteStudentGrade(id: string): Promise<void> {
-  const supabase = createClient()
-  const { error } = await supabase.from('student_grades').delete().eq('id', id)
-  if (error) throw new Error(error.message)
+  await apiRequest(`/api/grades/${id}`, 'DELETE')
 }
 
 export async function releaseAllGrades(classId?: string): Promise<void> {
-  const supabase = createClient()
-  
-  if (classId && classId !== 'all') {
-    // 1. Find students in this class
-    const { data: students, error: sErr } = await supabase
-      .from('students')
-      .select('cpf, enrollment_number, email')
-      .eq('class_id', classId)
-    
-    if (sErr) throw new Error(sErr.message)
-    
-    if (students && students.length > 0) {
-      // 2. Extract all possible identifiers (CPF, enrollment, email)
-      const identifiers = Array.from(new Set(
-        students.flatMap((s: any) => [
-          s.cpf?.replace(/\D/g, ''), 
-          s.enrollment_number, 
-          s.email?.toLowerCase().trim()
-        ].filter(Boolean))
-      ))
-
-      if (identifiers.length > 0) {
-        const { error: uErr } = await supabase
-          .from('student_grades')
-          .update({ is_public: true })
-          .in('student_identifier', identifiers)
-        
-        if (uErr) throw new Error(uErr.message)
-      }
-    }
-  } else {
-    // 3. Global Release: Update all records where is_public is not true
-    const { error: uErr } = await supabase
-      .from('student_grades')
-      .update({ is_public: true })
-      .filter('id', 'neq', '00000000-0000-0000-0000-000000000000')
-    
-    if (uErr) throw new Error(uErr.message)
-  }
+  await apiRequest('/api/grades/release', 'POST', { action: 'release', classId })
 }
 
 export async function blockAllGrades(classId?: string): Promise<void> {
-  const supabase = createClient()
-  
-  if (classId && classId !== 'all') {
-    const { data: students, error: sErr } = await supabase
-      .from('students')
-      .select('cpf, enrollment_number, email')
-      .eq('class_id', classId)
-    
-    if (sErr) throw new Error(sErr.message)
-    
-    if (students && students.length > 0) {
-      const identifiers = Array.from(new Set(
-        students.flatMap((s: any) => [
-          s.cpf?.replace(/\D/g, ''), 
-          s.enrollment_number, 
-          s.email?.toLowerCase().trim()
-        ].filter(Boolean))
-      ))
-
-      if (identifiers.length > 0) {
-        const { error: uErr } = await supabase
-          .from('student_grades')
-          .update({ is_public: false })
-          .in('student_identifier', identifiers)
-        
-        if (uErr) throw new Error(uErr.message)
-      }
-    }
-  } else {
-    const { error: uErr } = await supabase
-      .from('student_grades')
-      .update({ is_public: false })
-      .filter('id', 'neq', '00000000-0000-0000-0000-000000000000')
-    
-    if (uErr) throw new Error(uErr.message)
-  }
+  await apiRequest('/api/grades/release', 'POST', { action: 'block', classId })
 }
 
 export function calculateGlobalAverage(grade: StudentGrade, settings: GradeSettings): string {
