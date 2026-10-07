@@ -724,75 +724,23 @@ export async function saveGradeSettings(settings: GradeSettings): Promise<void> 
 }
 
 export async function getClasses(poloId?: string): Promise<ClassRoom[]> {
-  const supabase = createClient()
-  let query = supabase.from('classes').select('*').order('created_at', { ascending: false })
-  if (poloId && poloId !== 'all') query = query.eq('polo_id', poloId)
-  const { data: classes } = await query
-  const { data: counts } = await supabase.from('students').select('class_id')
-
-  const studentCounts: Record<string, number> = {}
-  counts?.forEach((s: any) => {
-    if (s.class_id) studentCounts[s.class_id] = (studentCounts[s.class_id] || 0) + 1
-  })
-
-  return (classes || []).map((c: any) => ({
-    ...mapClassRoom(c),
-    studentCount: studentCounts[c.id] || 0
-  }))
+  return apiRequest<ClassRoom[]>('/api/classes'+(poloId?`?poloId=${poloId}`:''))
 }
 
 export async function getPublicClasses(poloId?: string): Promise<ClassRoom[]> {
-  const supabase = createClient()
-  let query = supabase.from('classes').select('*').order('name', { ascending: true })
-  if (poloId && poloId !== 'all') query = query.eq('polo_id', poloId)
-  const { data: classes } = await query
-  const { data: counts } = await supabase.from('students').select('class_id')
-
-  const studentCounts: Record<string, number> = {}
-  counts?.forEach((s: any) => {
-    if (s.class_id) studentCounts[s.class_id] = (studentCounts[s.class_id] || 0) + 1
-  })
-
-  return (classes || []).map((c: any) => ({
-    ...mapClassRoom(c),
-    studentCount: studentCounts[c.id] || 0
-  }))
+  return apiRequest<ClassRoom[]>('/api/classes'+(poloId?`?poloId=${poloId}`:''))
 }
 
 export async function addClass(cls: Omit<ClassRoom, 'id' | 'createdAt' | 'studentCount'>): Promise<ClassRoom> {
-  const supabase = createClient()
-  const payload: any = {
-    name: cls.name,
-    shift: cls.shift,
-    day_of_week: cls.dayOfWeek || null,
-    max_students: cls.maxStudents
-  }
-  if (cls.poloId !== undefined && cls.poloId !== null) payload.polo_id = cls.poloId
-  if (cls.modality !== undefined && cls.modality !== null) payload.modality = cls.modality
-
-  const { data, error } = await supabase.from('classes').insert(payload).select().single()
-  if (error) throw error
-  return mapClassRoom(data)
+  return apiRequest<ClassRoom>('/api/classes', 'POST', cls)
 }
 
 export async function updateClass(id: string, cls: Partial<Omit<ClassRoom, 'id' | 'createdAt'>>): Promise<void> {
-  const supabase = createClient()
-  const dbData: any = {}
-  if (cls.name !== undefined) dbData.name = cls.name
-  if (cls.shift !== undefined) dbData.shift = cls.shift
-  if (cls.maxStudents !== undefined) dbData.max_students = cls.maxStudents
-  if (cls.dayOfWeek !== undefined) dbData.day_of_week = cls.dayOfWeek || null
-  if (cls.poloId !== undefined) dbData.polo_id = cls.poloId || null
-  if (cls.modality !== undefined) dbData.modality = cls.modality || null
-
-  const { error } = await supabase.from('classes').update(dbData).eq('id', id)
-  if (error) throw error
+  await apiRequest(`/api/classes/${id}`, 'PATCH', cls)
 }
 
 export async function deleteClass(id: string): Promise<void> {
-  const supabase = createClient()
-  const { error } = await supabase.from('classes').delete().eq('id', id)
-  if (error) throw error
+  await apiRequest(`/api/classes/${id}`, 'DELETE')
 }
 
 function mapClassRoom(row: any): ClassRoom {
@@ -993,41 +941,17 @@ export async function deleteExpense(id: string): Promise<void> {
 }
 
 export async function getSemesters(): Promise<Semester[]> {
-  const supabase = createClient()
-  const { data } = await supabase.from('semesters').select('*').order('order', { ascending: true })
-  return (data || []).map(mapSemester)
+  return apiRequest<Semester[]>('/api/semesters')
 }
 
 export async function addSemester(name: string, order: number, shift?: string, modality?: string, poloId?: string | null): Promise<Semester> {
-  const s = { name, order, shift: shift || null, modality: modality || 'presencial', polo_id: poloId || null, is_concluded: false, created_at: new Date().toISOString() }
-  const supabase = createClient()
-  const { data, error } = await supabase.from('semesters').insert(s).select().single()
-  if (error) throw new Error(error.message)
-  return mapSemester(data)
+  return apiRequest<Semester>('/api/semesters', 'POST', { name, order, shift, modality, poloId })
 }
 export async function updateSemester(id: string, data: Partial<Pick<Semester, "name" | "order" | "shift" | "modality" | "poloId" | "isConcluded">>): Promise<void> {
-  const supabase = createClient()
-  const updatePayload: any = {}
-  if (data.name !== undefined) updatePayload.name = data.name
-  if (data.order !== undefined) updatePayload.order = data.order
-  if (data.shift !== undefined) updatePayload.shift = data.shift || null
-  if (data.modality !== undefined) updatePayload.modality = data.modality || 'presencial'
-  if (data.poloId !== undefined) updatePayload.polo_id = data.poloId || null
-  if (data.isConcluded !== undefined) updatePayload.is_concluded = data.isConcluded
-
-  const { error, count } = await supabase.from('semesters').update(updatePayload).eq('id', id).select('id', { count: 'exact' })
-  if (error) {
-    console.error("Error updating semester:", error)
-    throw new Error(`Falha ao atualizar semestre: ${error.message}`)
-  }
-  if (data.poloId !== undefined) {
-    await supabase.from('disciplines').update({ polo_id: data.poloId || null }).eq('semester_id', id)
-  }
-  console.log(`Semester ${id} updated status. Rows affected: ${count}`)
+  await apiRequest(`/api/semesters/${id}`, 'PATCH', data)
 }
 export async function deleteSemester(id: string): Promise<void> {
-  const supabase = createClient()
-  await supabase.from('semesters').delete().eq('id', id)
+  await apiRequest(`/api/semesters/${id}`, 'DELETE')
 }
 
 export async function getDisciplines(): Promise<Discipline[]> {
@@ -2101,41 +2025,19 @@ export async function deleteClassSchedule(id: string): Promise<void> {
 // com mês/ano específicos, usada pelo financeiro para gerar as mensalidades.
 
 export async function getClassCurriculum(classId: string): Promise<ClassCurriculumItem[]> {
-  const supabase = createClient()
-  const { data } = await supabase.from('class_curriculum').select('*').eq('class_id', classId).order('order', { ascending: true })
-  return (data || []).map(mapClassCurriculumItem)
+  return apiRequest<ClassCurriculumItem[]>(`/api/class-curriculum?classId=${classId}`)
 }
 
 export async function saveClassCurriculumItem(item: Omit<ClassCurriculumItem, 'id' | 'createdAt'>, id?: string): Promise<void> {
-  const supabase = createClient()
-  const dbData: any = {
-    class_id: item.classId,
-    discipline_id: item.disciplineId,
-    order: item.order,
-    application_month: item.applicationMonth || null,
-    application_year: item.applicationYear || null,
-    is_concluded: item.isConcluded || false,
-    professor_name: item.professorName || null,
-  }
-  if (id) {
-    const { error } = await supabase.from('class_curriculum').update(dbData).eq('id', id)
-    if (error) throw new Error(error.message)
-  } else {
-    const { error } = await supabase.from('class_curriculum').insert({ ...dbData, created_at: new Date().toISOString() })
-    if (error) throw new Error(error.message)
-  }
+  await apiRequest('/api/class-curriculum', 'POST', { item, id })
 }
 
 export async function deleteClassCurriculumItem(id: string): Promise<void> {
-  const supabase = createClient()
-  await supabase.from('class_curriculum').delete().eq('id', id)
+  await apiRequest(`/api/class-curriculum/${id}`, 'DELETE')
 }
 
 export async function reorderClassCurriculum(orderedItemIds: string[]): Promise<void> {
-  const supabase = createClient()
-  await Promise.all(orderedItemIds.map((id, index) =>
-    supabase.from('class_curriculum').update({ order: index }).eq('id', id)
-  ))
+  await apiRequest('/api/class-curriculum/reorder', 'POST', { ids: orderedItemIds })
 }
 
 // Resolve a grade "global" atual (mesma lógica antes usada por syncStudentTuitionByDisciplines),
