@@ -337,45 +337,15 @@ export async function registerStudentByAdmin(data: any): Promise<void> {
 }
 
 export async function loginStudentAuth(identifier: string, password: string) {
-  const supabase = createClient()
-  let targetEmail = ''
-
-  // 1. Call login API endpoint to auto-provision and sync account
-  try {
-    const res = await fetch('/api/student/login', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ identifier, password })
-    })
-    if (!res.ok) {
-      const err = await res.json()
-      throw new Error(err.error || 'Identificador ou senha inválidos.')
-    }
-    const apiData = await res.json()
-    targetEmail = apiData.email
-  } catch (err: any) {
-    if (err.message && !err.message.includes('fetch')) {
-      throw err
-    }
-    // Fallback if offline
-    if (identifier.includes('@')) {
-      targetEmail = identifier.trim().toLowerCase()
-    } else {
-      const cleanId = identifier.replace(/\D/g, '')
-      targetEmail = `${cleanId}@${BRAND.emailDomain}`
-    }
-  }
-
-  // 2. Authenticate client session in Supabase Auth
-  const { data, error } = await supabase.auth.signInWithPassword({
-    email: targetEmail,
-    password: password.trim()
+  // O login é feito no servidor (Better Auth), que grava o cookie de sessão.
+  const res = await fetch('/api/student/login', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ identifier, password })
   })
-  if (error) {
-    throw new Error("Senha incorreta. Sua senha inicial padrão é o seu CPF (apenas números) ou 123456.")
-  }
-
-  return data
+  const body = await res.json().catch(() => ({}))
+  if (!res.ok) throw new Error(body.error || 'Identificador ou senha inválidos.')
+  return body as { success: true; studentId: string; name: string }
 }
 
 export async function getStudentProfileAuth(): Promise<StudentProfile | null> {
