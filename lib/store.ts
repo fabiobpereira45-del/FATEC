@@ -1054,57 +1054,27 @@ export async function unlinkProfessorFromDiscipline(professorId: string, discipl
 }
 
 export async function getBoardMembers(): Promise<BoardMember[]> {
-  const supabase = createClient()
-  const { data } = await supabase.from('board_members').select('*').order('category', { ascending: false })
-  return (data || []).map(mapBoardMember)
+  return apiRequest<BoardMember[]>('/api/board-members')
 }
 
 export async function getTestimonials(publishedOnly: boolean = true): Promise<Testimonial[]> {
-  const supabase = createClient()
-  let query = supabase.from('testimonials').select('*').order('order', { ascending: true })
-  if (publishedOnly) query = query.eq('is_published', true)
-  const { data, error } = await query
-  if (error) {
-    console.warn("Erro ao buscar depoimentos:", error.message)
-    return []
-  }
-  return (data || []).map(mapTestimonial)
+  return apiRequest<Testimonial[]>(`/api/testimonials${publishedOnly ? '' : '?all=1'}`).catch(() => [])
 }
 
 export async function addTestimonial(data: {
   name: string; role?: string; polo?: string; quote: string; photoUrl?: string | null; isPublished?: boolean; order?: number
 }): Promise<Testimonial> {
-  const supabase = createClient()
-  const row = {
-    name: data.name, role: data.role || null, polo: data.polo || null, quote: data.quote,
-    photo_url: data.photoUrl || null, is_published: data.isPublished ?? true, order: data.order ?? 0,
-    created_at: new Date().toISOString(),
-  }
-  const { data: inserted, error } = await supabase.from('testimonials').insert(row).select().single()
-  if (error) throw new Error(error.message)
-  return mapTestimonial(inserted)
+  return apiRequest<Testimonial>('/api/testimonials', 'POST', data)
 }
 
 export async function updateTestimonial(id: string, data: Partial<{
   name: string; role: string; polo: string; quote: string; photoUrl: string | null; isPublished: boolean; order: number
 }>): Promise<void> {
-  const supabase = createClient()
-  const updateData: any = {}
-  if (data.name !== undefined) updateData.name = data.name
-  if (data.role !== undefined) updateData.role = data.role || null
-  if (data.polo !== undefined) updateData.polo = data.polo || null
-  if (data.quote !== undefined) updateData.quote = data.quote
-  if (data.photoUrl !== undefined) updateData.photo_url = data.photoUrl
-  if (data.isPublished !== undefined) updateData.is_published = data.isPublished
-  if (data.order !== undefined) updateData.order = data.order
-  const { error } = await supabase.from('testimonials').update(updateData).eq('id', id)
-  if (error) throw new Error(error.message)
+  await apiRequest(`/api/testimonials/${id}`, 'PATCH', data)
 }
 
 export async function deleteTestimonial(id: string): Promise<void> {
-  const supabase = createClient()
-  const { error } = await supabase.from('testimonials').delete().eq('id', id)
-  if (error) throw new Error(error.message)
+  await apiRequest(`/api/testimonials/${id}`, 'DELETE')
 }
 export async function addDiscipline(
   name: string,
@@ -1472,36 +1442,15 @@ export async function deleteStudent(id: string): Promise<void> {
 }
 
 export async function getChatMessages(disciplineId: string, studentId: string): Promise<ChatMessage[]> {
-  const supabase = createClient()
-  const { data } = await supabase.from('chats').select('*').match({ discipline_id: disciplineId, student_id: studentId }).order('created_at', { ascending: true })
-  return (data || []).map(mapChatMessage)
+  return apiRequest<ChatMessage[]>(`/api/chat/messages?disciplineId=${disciplineId}&studentId=${studentId}`)
 }
 
 export async function sendChatMessage(studentId: string, disciplineId: string, message: string, isFromStudent: boolean): Promise<ChatMessage> {
-  const supabase = createClient()
-  const dbData = { student_id: studentId, discipline_id: disciplineId, message, is_from_student: isFromStudent, read: false, created_at: new Date().toISOString() }
-  const { data, error } = await supabase.from('chats').insert(dbData).select().single()
-  if (error) throw new Error(error.message)
-
-  // Trigger n8n if message is from professor to student
-  if (!isFromStudent) {
-    const { data: student } = await supabase.from('students').select('name, phone').eq('id', studentId).single();
-    if (student) {
-      triggerN8nWebhook('nova_mensagem_chat', {
-        type: 'chat',
-        studentName: student.name,
-        phone: student.phone,
-        message: message
-      });
-    }
-  }
-
-  return mapChatMessage(data)
+  return apiRequest<ChatMessage>('/api/chat/messages', 'POST', { studentId, disciplineId, message, isFromStudent })
 }
 
 export async function markChatAsRead(id: string): Promise<void> {
-  const supabase = createClient()
-  await supabase.from('chats').update({ read: true }).eq('id', id)
+  await apiRequest(`/api/chat/messages/${id}`, 'PATCH')
 }
 
 export async function getAttendances(disciplineId: string, poloId?: string): Promise<Attendance[]> {
