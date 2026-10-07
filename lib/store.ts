@@ -1947,11 +1947,7 @@ export async function markChatAsRead(id: string): Promise<void> {
 }
 
 export async function getAttendances(disciplineId: string, poloId?: string): Promise<Attendance[]> {
-  const supabase = createClient()
-  let query = supabase.from('attendances').select('*').eq('discipline_id', disciplineId).order('date', { ascending: false })
-  if (poloId && poloId !== 'all') query = query.eq('polo_id', poloId)
-  const { data } = await query
-  return (data || []).map(mapAttendance)
+  return apiRequest<Attendance[]>(`/api/attendance?disciplineId=${disciplineId}`)
 }
 
 export async function getAttendanceAnalysis(disciplineId: string, students: StudentProfile[]) {
@@ -2048,151 +2044,19 @@ export async function triggerAttendanceAlerts(disciplineId: string, disciplineNa
 }
 
 export async function saveAttendance(studentId: string, disciplineId: string, date: string, isPresent: boolean): Promise<void> {
-  const supabase = createClient()
-
-  // Strict check for existing record
-  const { data: existing, error: fetchError } = await supabase.from('attendances')
-    .select('id')
-    .match({ student_id: studentId, discipline_id: disciplineId, date })
-    .maybeSingle()
-
-  if (fetchError) {
-    console.error("Supabase Fetch Error (Attendance):", fetchError)
-    throw new Error(`Erro de consulta: ${fetchError.message}`)
-  }
-
-  if (existing) {
-    const { error: updateError } = await supabase.from('attendances')
-      .update({ is_present: isPresent })
-      .eq('id', existing.id)
-
-    if (updateError) {
-      console.error("Supabase Update Error (Attendance):", updateError)
-      throw new Error(`Erro ao atualizar banco: ${updateError.message}`)
-    }
-  } else {
-    const { error: insertError } = await supabase.from('attendances')
-      .insert({
-        student_id: studentId,
-        discipline_id: disciplineId,
-        date,
-        is_present: isPresent,
-        created_at: new Date().toISOString()
-      })
-
-    if (insertError) {
-      console.error("Supabase Insert Error (Attendance):", insertError)
-      throw new Error(`Erro ao gravar no banco: ${insertError.message}`)
-    }
-  }
-
-  // --- AUTOMATIC ATTENDANCE SCORE UPDATE ---
-  try {
-    // 1. Count all presences for this student in this discipline
-    const { data: allAtt } = await supabase.from('attendances')
-      .select('is_present')
-      .match({ student_id: studentId, discipline_id: disciplineId });
-
-    const presenceCount = (allAtt || []).filter((a: any) => a.is_present).length;
-    const attendanceScore = Math.min(presenceCount * 2.5, 10.0);
-
-    // 2. Get student info for the grade record
-    const { data: student } = await supabase.from('students').select('id, name, email').eq('id', studentId).single();
-
-    if (student) {
-      const cleanCpf = student.cpf ? student.cpf.replace(/\D/g, '') : null;
-      const { data: existingGrades } = await supabase.from('student_grades')
-        .select('id, student_identifier, student_id')
-        .eq('discipline_id', disciplineId);
-
-      const gradeData: any = {
-        student_id: studentId,
-        student_name: student.name,
-        attendance_score: attendanceScore,
-      };
-
-      let updatedAny = false;
-      if (existingGrades) {
-        for (const grade of existingGrades) {
-          let isMatch = false;
-          if (grade.student_id === studentId) isMatch = true;
-          else if (grade.student_identifier) {
-            const ident = grade.student_identifier.toLowerCase().trim();
-            const cleanIdent = ident.replace(/\D/g, '');
-            if (ident === student.email?.toLowerCase().trim()) isMatch = true;
-            else if (cleanCpf && cleanIdent === cleanCpf) isMatch = true;
-          }
-          if (isMatch) {
-            await supabase.from('student_grades').update(gradeData).eq('id', grade.id);
-            updatedAny = true;
-          }
-        }
-      }
-
-      if (!updatedAny) {
-        await supabase.from('student_grades').insert({ 
-          ...gradeData, 
-          discipline_id: disciplineId,
-          student_identifier: student.email || student.cpf || student.id,
-          exam_grade: 0,
-          works_grade: 0,
-          seminar_grade: 0,
-          participation_bonus: 0,
-          custom_divisor: 2,
-          is_public: false, 
-          created_at: new Date().toISOString() 
-        });
-      }
-    }
-  } catch (err) {
-    console.error("Erro ao atualizar nota de presença no boletim:", err);
-  }
-
-  // Trigger n8n if absent
-  if (!isPresent) {
-    const { data: student } = await supabase.from('students').select('name, phone').eq('id', studentId).single();
-    const { data: discipline } = await supabase.from('disciplines').select('name').eq('id', disciplineId).single();
-    if (student) {
-      triggerN8nWebhook('falta_registrada', {
-        type: 'attendance',
-        studentName: student.name,
-        phone: student.phone,
-        disciplineName: discipline?.name || "Disciplina",
-        date: date
-      });
-    }
-  }
+  await apiRequest('/api/attendance', 'POST', { studentId, disciplineId, date, isPresent })
 }
 
 export async function getAttendanceLock(disciplineId: string, date: string): Promise<AttendanceLock | null> {
-  const supabase = createClient()
-  const { data } = await supabase.from('attendance_locks').select('*').match({ discipline_id: disciplineId, date }).maybeSingle()
-  if (!data) return null
-  return {
-    id: data.id,
-    disciplineId: data.discipline_id,
-    date: data.date,
-    lockedBy: data.locked_by,
-    lockedAt: data.locked_at
-  }
+  return apiRequest<AttendanceLock | null>(`/api/attendance/lock?disciplineId=${disciplineId}&date=${date}`)
 }
 
 export async function lockAttendance(disciplineId: string, date: string, lockedBy: string): Promise<void> {
-  const supabase = createClient()
-  // Ensure we don't hit UUID error with 'master'
-  const userId = lockedBy === 'master' ? '00000000-0000-0000-0000-000000000000' : lockedBy
-
-  await supabase.from('attendance_locks').insert({
-    discipline_id: disciplineId,
-    date,
-    locked_by: userId,
-    locked_at: new Date().toISOString()
-  })
+  await apiRequest('/api/attendance/lock', 'POST', { disciplineId, date, lockedBy })
 }
 
 export async function unlockAttendance(id: string): Promise<void> {
-  const supabase = createClient()
-  await supabase.from('attendance_locks').delete().eq('id', id)
+  await apiRequest(`/api/attendance/lock?id=${id}`, 'DELETE')
 }
 
 // ─── n8n WhatsApp Integration ──────────────────────────────────────────────
@@ -2257,18 +2121,7 @@ export async function bulkSyncGrades(): Promise<{ totalAffected: number }> {
  * Fetches all attendances for a specific student in a single call.
  */
 export async function getStudentAttendances(studentId: string): Promise<Attendance[]> {
-  const supabase = createClient()
-  const { data, error } = await supabase.from('attendances')
-    .select('*')
-    .eq('student_id', studentId)
-    .order('date', { ascending: false })
-
-  if (error) {
-    console.error("Error fetching student attendances:", error)
-    return []
-  }
-
-  return (data || []).map(mapAttendance)
+  return apiRequest<Attendance[]>(`/api/attendance?studentId=${studentId}`)
 }
 
 export async function saveStudentGrade(grade: Omit<StudentGrade, 'id' | 'createdAt'>, id?: string): Promise<void> {
