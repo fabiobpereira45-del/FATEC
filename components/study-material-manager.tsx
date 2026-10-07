@@ -21,7 +21,6 @@ import {
     type StudyMaterial, type Discipline,
     getStudyMaterials, addStudyMaterial, deleteStudyMaterial, getDisciplines
 } from "@/lib/store"
-import { createClient } from "@/lib/supabase/client"
 
 function formatDate(iso: string) {
     return new Date(iso).toLocaleDateString("pt-BR", {
@@ -46,8 +45,6 @@ export function StudyMaterialManager() {
     const [deleteId, setDeleteId] = useState<string | null>(null)
     const fileInputRef = useRef<HTMLInputElement>(null)
 
-    const supabase = createClient()
-
     async function load() {
         setLoading(true)
         const [m, d] = await Promise.all([getStudyMaterials(), getDisciplines()])
@@ -67,23 +64,16 @@ export function StudyMaterialManager() {
 
         setUploading(true)
         try {
-            // 1. Upload to Supabase Storage
-            const fileExt = file.name.split('.').pop()
-            const fileName = `${Math.random().toString(36).substring(2, 15)}_${Date.now()}.${fileExt}`
-            const filePath = `disciplines/${fileDiscId}/${fileName}`
+            // 1. Upload para o Vercel Blob
+            const form = new FormData()
+            form.append('file', file)
+            form.append('disciplineId', fileDiscId)
+            const uploadRes = await fetch('/api/upload/material', { method: 'POST', body: form })
+            const uploadBody = await uploadRes.json().catch(() => ({}))
+            if (!uploadRes.ok) throw new Error(uploadBody.error || 'Erro no upload.')
+            const publicUrl = uploadBody.url as string
 
-            const { data: uploadData, error: uploadError } = await supabase.storage
-                .from('materials')
-                .upload(filePath, file, { cacheControl: '3600', upsert: false })
-
-            if (uploadError) throw new Error(uploadError.message)
-
-            // 2. Get Public URL
-            const { data: { publicUrl } } = supabase.storage
-                .from('materials')
-                .getPublicUrl(filePath)
-
-            // 3. Save to Database
+            // 2. Save to Database
             await addStudyMaterial({
                 disciplineId: fileDiscId,
                 title: title.trim(),

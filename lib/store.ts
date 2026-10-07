@@ -1106,23 +1106,13 @@ export async function deleteDiscipline(id: string): Promise<void> {
 }
 
 export async function getStudyMaterials(disciplineId?: string): Promise<StudyMaterial[]> {
-  const supabase = createClient()
-  let query = supabase.from('study_materials').select('*').order('created_at', { ascending: false })
-  if (disciplineId) query = query.eq('discipline_id', disciplineId)
-
-  const { data } = await query
-  return (data || []).map(mapStudyMaterial)
+  return apiRequest<StudyMaterial[]>('/api/study-materials'+(disciplineId?`?disciplineId=${disciplineId}`:''))
 }
 export async function addStudyMaterial(material: Omit<StudyMaterial, "id" | "createdAt">): Promise<StudyMaterial> {
-  const supabase = createClient()
-  const dbData = { discipline_id: material.disciplineId, title: material.title, description: material.description, file_url: material.fileUrl, created_at: new Date().toISOString() }
-  const { data, error } = await supabase.from('study_materials').insert(dbData).select().single()
-  if (error) throw new Error(error.message)
-  return mapStudyMaterial(data)
+  return apiRequest<StudyMaterial>('/api/study-materials', 'POST', material)
 }
 export async function deleteStudyMaterial(id: string): Promise<void> {
-  const supabase = createClient()
-  await supabase.from('study_materials').delete().eq('id', id)
+  await apiRequest(`/api/study-materials/${id}`, 'DELETE')
 }
 
 export async function getQuestions(): Promise<Question[]> {
@@ -1766,22 +1756,14 @@ export async function syncAllAttendanceScores(): Promise<void> {
 // ─── Profile / Avatar Management ──────────────────────────────────────────
 
 export async function uploadAvatar(file: File, userId: string, folder: 'students' | 'professors' | 'board' | 'testimonials'): Promise<string> {
-  const supabase = createClient()
-  const fileExt = file.name.split('.').pop()
-  const fileName = `${userId}-${Math.random().toString(36).slice(2)}.${fileExt}`
-  const filePath = `${folder}/${fileName}`
-
-  const { error: uploadError } = await supabase.storage
-    .from('avatars')
-    .upload(filePath, file)
-
-  if (uploadError) throw new Error(uploadError.message)
-
-  const { data } = supabase.storage
-    .from('avatars')
-    .getPublicUrl(filePath)
-
-  return data.publicUrl
+  const type = folder === 'students' ? 'student' : folder === 'professors' ? 'professor' : 'board'
+  const form = new FormData()
+  form.append('file', file)
+  form.append('type', type)
+  const res = await fetch('/api/upload/avatar', { method: 'POST', body: form })
+  const body = await res.json().catch(() => ({}))
+  if (!res.ok) throw new Error(body.error || 'Erro no upload.')
+  return body.url as string
 }
 
 export async function updateProfileAvatar(
