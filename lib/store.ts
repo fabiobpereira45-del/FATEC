@@ -627,18 +627,7 @@ export async function getUserLogs(limit = 100): Promise<UserLog[]> {
 // ─── Async Supabase Operations ───────────────────────────────────────────────
 
 export async function getFinancialSettings(): Promise<FinancialSettings | null> {
-  try {
-    const res = await fetch("/api/admin/config?type=financial", { cache: "no-store" })
-    if (res.ok) {
-      const json = await res.json()
-      if (json?.data) return mapFinancialSettings(json.data)
-    }
-  } catch (e) {
-    console.warn("Fallback to client supabase for financial settings", e)
-  }
-  const supabase = createClient()
-  const { data } = await supabase.from('financial_settings').select('*').limit(1).maybeSingle()
-  return data ? mapFinancialSettings(data) : null
+  return apiRequest<FinancialSettings | null>('/api/admin/config?type=financial').then(r => (r as any)?.data ?? r).catch(() => null)
 }
 
 export async function updateFinancialSettings(settings: Omit<FinancialSettings, "id" | "updatedAt">): Promise<void> {
@@ -654,18 +643,7 @@ export async function updateFinancialSettings(settings: Omit<FinancialSettings, 
 }
 
 export async function getAsaasConfig(): Promise<AsaasConfig | null> {
-  try {
-    const res = await fetch("/api/admin/config?type=asaas", { cache: "no-store" })
-    if (res.ok) {
-      const json = await res.json()
-      if (json?.data) return mapAsaasConfig(json.data)
-    }
-  } catch (e) {
-    console.warn("Fallback to client supabase for asaas config", e)
-  }
-  const supabase = createClient()
-  const { data } = await supabase.from('asaas_config').select('*').limit(1).maybeSingle()
-  return data ? mapAsaasConfig(data) : null
+  return apiRequest<AsaasConfig | null>('/api/admin/config?type=asaas').then(r => (r as any)?.data ?? r).catch(() => null)
 }
 
 export async function updateAsaasConfig(config: Omit<AsaasConfig, "id" | "updatedAt">): Promise<void> {
@@ -723,186 +701,42 @@ function mapClassRoom(row: any): ClassRoom {
 }
 
 export async function getFinancialCharges(studentId?: string, poloId?: string): Promise<FinancialCharge[]> {
-  const supabase = createClient()
-  let allData: any[] = []
-  let hasMore = true
-  let page = 0
-  const limitSize = 1000
-
-  while (hasMore) {
-    let query = supabase.from('financial_charges').select('*').order('due_date', { ascending: false }).range(page * limitSize, (page + 1) * limitSize - 1)
-    if (studentId) query = query.eq('student_id', studentId)
-    if (poloId && poloId !== 'all') query = query.eq('polo_id', poloId)
-
-    const { data, error } = await query
-    if (error) break
-
-    if (data && data.length > 0) {
-      allData = [...allData, ...data]
-      if (data.length < limitSize) {
-        hasMore = false
-      } else {
-        page++
-      }
-    } else {
-      hasMore = false
-    }
-  }
-
-  return allData.map(mapFinancialCharge)
+  return apiRequest<FinancialCharge[]>('/api/finance/charges'+(studentId?`?studentId=${studentId}`:''))
 }
 export async function addFinancialCharge(charge: Omit<FinancialCharge, "id" | "createdAt" | "status" | "paymentDate">): Promise<FinancialCharge> {
-  const supabase = createClient()
-  const dbData = {
-    student_id: charge.studentId,
-    type: charge.type,
-    description: charge.description,
-    amount: charge.amount,
-    due_date: charge.dueDate,
-    status: 'pending',
-    created_at: new Date().toISOString()
-  }
-  const { data, error } = await supabase.from('financial_charges').insert(dbData).select().single()
-  if (error) throw new Error(error.message)
-
-  // Trigger n8n for new charge
-  try {
-    const { data: student } = await supabase.from('students').select('name, phone').eq('id', charge.studentId).maybeSingle()
-    if (student) {
-      triggerN8nWebhook('pagamento_gerado', {
-        type: 'financial',
-        studentName: student.name,
-        studentPhone: student.phone,
-        amount: charge.amount,
-        description: charge.description,
-        dueDate: charge.dueDate
-      });
-    }
-  } catch (err) {
-    console.error("Erro ao disparar WhatsApp n8n financeiro:", err);
-  }
-
-  return mapFinancialCharge(data)
+  return apiRequest<FinancialCharge>('/api/finance/charges', 'POST', charge)
 }
 export async function updateFinancialChargesStatusBatch(ids: string[], status: FinancialCharge["status"]): Promise<void> {
-  const supabase = createClient()
-  const dbData: any = { status }
-  if (status === 'paid') dbData.payment_date = new Date().toISOString()
-  if (status === 'pending') dbData.payment_date = null
-
-  const { error } = await supabase.from('financial_charges').update(dbData).in('id', ids)
-  if (error) throw new Error(error.message)
+  await apiRequest('/api/finance/charges/status', 'POST', { ids, status })
 }
 
 export async function updateFinancialChargeStatus(id: string, status: FinancialCharge["status"]): Promise<void> {
-  const supabase = createClient()
-  const dbData: any = { status }
-  if (status === 'paid') dbData.payment_date = new Date().toISOString()
-  if (status === 'pending' || status === 'cancelled' || status === 'isento' || status === 'bolsa100') {
-    dbData.payment_date = null
-    dbData.payment_method = null
-    dbData.actual_paid_amount = null
-    dbData.asaas_payment_id = null
-    dbData.pix_qrcode = null
-    dbData.pix_copy_paste = null
-  }
-  const { error } = await supabase.from('financial_charges').update(dbData).eq('id', id)
-  if (error) throw new Error(error.message)
-
-  // Trigger actions on payment
-  if (status === 'paid') {
-    try {
-      const { data: charge } = await supabase.from('financial_charges').select('*, students(*)').eq('id', id).single()
-      if (charge) {
-        // 1. Trigger n8n WhatsApp (Payment Confirmed)
-        triggerN8nWebhook('pagamento_confirmado', {
-          type: 'payment',
-          name: charge.students?.name,
-          phone: charge.students?.phone,
-          amount: charge.amount,
-          description: charge.description
-        })
-
-        // 2. If it's an enrollment charge, activate the student
-        if (charge.type === 'enrollment' && charge.student_id) {
-          const baseUrl = process.env.NEXT_PUBLIC_APP_URL || (typeof window !== "undefined" ? window.location.origin : 'https://fatec.vercel.app')
-          await fetch(`${baseUrl}/api/student/activate`, {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ studentId: charge.student_id })
-          }).catch(e => console.error("Activation fetch error:", e))
-        }
-      }
-    } catch (err) {
-      console.error("Error in post-payment actions:", err)
-    }
-  }
+  await apiRequest('/api/finance/charges/status', 'POST', { id, status })
 }
 export async function deleteFinancialCharge(id: string): Promise<void> {
-  const supabase = createClient()
-  await supabase.from('financial_charges').delete().eq('id', id)
+  await apiRequest(`/api/finance/charges/${id}`, 'DELETE')
 }
 
 // ─── Expenses CRUD ───────────────────────────────────────────────────────────
 
 export async function getExpenses(poloId?: string): Promise<Expense[]> {
-  const supabase = createClient()
-  let query = supabase.from('expenses').select('*').order('due_date', { ascending: false })
-  if (poloId && poloId !== 'all') query = query.eq('polo_id', poloId)
-  const { data } = await query
-  return (data || []).map(mapExpense)
+  return apiRequest<Expense[]>('/api/finance/expenses')
 }
 
 export async function addExpense(expense: Omit<Expense, "id" | "createdAt" | "status" | "paidAt">): Promise<Expense> {
-  const supabase = createClient()
-  const dbData = {
-    description: expense.description,
-    amount: expense.amount,
-    category: expense.category,
-    due_date: expense.dueDate,
-    status: 'pending',
-    created_at: new Date().toISOString()
-  }
-  const { data, error } = await supabase.from('expenses').insert(dbData).select().single()
-  if (error) throw new Error(error.message)
-  return mapExpense(data)
+  return apiRequest<Expense>('/api/finance/expenses', 'POST', expense)
 }
 
 export async function addExpenseBatch(expenses: Omit<Expense, "id" | "createdAt" | "status" | "paidAt">[]): Promise<void> {
-  const supabase = createClient()
-  const dbData = expenses.map(exp => ({
-    description: exp.description,
-    amount: exp.amount,
-    category: exp.category,
-    due_date: exp.dueDate,
-    status: 'pending',
-    created_at: new Date().toISOString()
-  }))
-  if (dbData.length > 0) {
-    const { error } = await supabase.from('expenses').insert(dbData)
-    if (error) throw new Error(error.message)
-  }
+  await apiRequest('/api/finance/expenses', 'POST', { expenses })
 }
 
 export async function updateExpense(id: string, data: Partial<Omit<Expense, "id" | "createdAt">>): Promise<void> {
-  const supabase = createClient()
-  const dbData: any = {}
-  if (data.description !== undefined) dbData.description = data.description
-  if (data.amount !== undefined) dbData.amount = data.amount
-  if (data.category !== undefined) dbData.category = data.category
-  if (data.dueDate !== undefined) dbData.due_date = data.dueDate
-  if (data.status !== undefined) {
-    dbData.status = data.status
-    if (data.status === 'paid') dbData.paid_at = new Date().toISOString()
-    else dbData.paid_at = null
-  }
-  const { error } = await supabase.from('expenses').update(dbData).eq('id', id)
-  if (error) throw new Error(error.message)
+  await apiRequest(`/api/finance/expenses/${id}`, 'PATCH', data)
 }
 
 export async function deleteExpense(id: string): Promise<void> {
-  const supabase = createClient()
-  await supabase.from('expenses').delete().eq('id', id)
+  await apiRequest(`/api/finance/expenses/${id}`, 'DELETE')
 }
 
 export async function getSemesters(): Promise<Semester[]> {
@@ -2408,29 +2242,11 @@ export async function settleFinancialCharge(id: string, data: {
   method: "cartao" | "pix" | "dinheiro",
   date: string
 }): Promise<void> {
-  const supabase = createClient()
-  const dbData = {
-    status: 'paid',
-    actual_paid_amount: data.paidAmount,
-    payment_method: data.method,
-    payment_date: data.date
-  }
-  const { error } = await supabase.from('financial_charges').update(dbData).eq('id', id)
-  if (error) throw new Error(error.message)
+  await apiRequest('/api/finance/charges/settle', 'POST', { id, ...data })
 }
 
 export async function reverseFinancialCharge(id: string): Promise<void> {
-  const supabase = createClient()
-  const dbData = {
-    status: 'pending',
-    actual_paid_amount: null,
-    payment_method: null,
-    payment_date: null,
-    pix_qrcode: null,
-    pix_copy_paste: null
-  }
-  const { error } = await supabase.from('financial_charges').update(dbData).eq('id', id)
-  if (error) throw new Error(error.message)
+  await apiRequest('/api/finance/charges/settle', 'POST', { id, action: 'reverse' })
 }
 
 export async function updateFinancialCharge(id: string, data: {
@@ -2439,24 +2255,7 @@ export async function updateFinancialCharge(id: string, data: {
   dueDate?: string
   status?: FinancialCharge["status"]
 }): Promise<void> {
-  const supabase = createClient()
-  const dbData: any = {}
-  if (data.amount !== undefined) dbData.amount = data.amount
-  if (data.description !== undefined) dbData.description = data.description
-  if (data.dueDate !== undefined) dbData.due_date = data.dueDate
-  if (data.status !== undefined) {
-    dbData.status = data.status
-    if (data.status === 'pending' || data.status === 'cancelled' || data.status === 'isento' || data.status === 'bolsa100') {
-      dbData.payment_date = null
-      dbData.payment_method = null
-      dbData.actual_paid_amount = null
-      dbData.pix_qrcode = null
-      dbData.pix_copy_paste = null
-    }
-  }
-
-  const { error } = await supabase.from('financial_charges').update(dbData).eq('id', id)
-  if (error) throw new Error(error.message)
+  await apiRequest(`/api/finance/charges/${id}`, 'PATCH', data)
 }
 
 // Build timestamp: 2026-03-13 10:59
