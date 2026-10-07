@@ -79,6 +79,27 @@ export async function createEnrollment(input: EnrollmentInput) {
   return { studentId, enrollmentNumber, chargeId: chargeRows[0].id }
 }
 
+// Autocadastro do aluno: ele mesmo escolhe a senha (não é uma senha previsível).
+export async function registerStudent(name: string, cpf: string, password: string) {
+  const cleanCpf = cpf.replace(/\D/g, "")
+  const email = `${cleanCpf}@${BRAND.emailDomain}`
+  const matricula = `${new Date().getFullYear()}${Math.floor(1000 + Math.random() * 9000)}`
+
+  const created = await auth.api.signUpEmail({ body: { email, password, name } })
+  try {
+    await pool.query(
+      `insert into students (auth_user_id, name, cpf, email, enrollment_number, status)
+       values ($1, $2, $3, $4, $5, 'pending')`,
+      [created.user.id, name, cleanCpf, email, matricula]
+    )
+  } catch (err) {
+    // Reverte a conta criada se o cadastro do aluno falhar (ex.: CPF duplicado).
+    await pool.query('delete from "user" where id = $1', [created.user.id]).catch(() => {})
+    throw err
+  }
+  return { matricula, name }
+}
+
 // Ativa o aluno e, se ainda não tiver conta, cria uma com senha aleatória.
 // A senha só é devolvida nesta resposta, para a secretaria repassar ao aluno.
 export async function activateStudent(studentId: string) {

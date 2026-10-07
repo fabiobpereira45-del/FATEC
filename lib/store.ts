@@ -3,6 +3,7 @@ import { createClient } from "@/lib/supabase/client"
 import { triggerN8nWebhook } from "@/lib/n8n"
 import { BRAND } from "@/lib/brand"
 import { apiRequest } from "@/lib/api-client"
+import { authClient } from "@/lib/auth-client"
 export { triggerN8nWebhook }
 
 // ─── Types ────────────────────────────────────────────────────────────────────
@@ -286,30 +287,7 @@ export function clearProfessorSession(): void {
 }
 
 export async function registerStudentAuth(name: string, cpf: string, password: string) {
-  const supabase = createClient()
-  const cleanCpf = cpf.replace(/\D/g, '')
-  const email = `${cleanCpf}@${BRAND.emailDomain}`
-
-  const { data: authData, error: authError } = await supabase.auth.signUp({
-    email,
-    password,
-    options: { data: { name, type: 'student' } }
-  })
-  if (authError) throw new Error(authError.message)
-  if (!authData.user) throw new Error("Erro ao criar usuário na base de dados.")
-
-  const matricula = `2026${Math.floor(1000 + Math.random() * 9000)}`
-
-  const { error: dbError } = await supabase.from('students').insert({
-    auth_user_id: authData.user.id,
-    name,
-    cpf: cleanCpf,
-    email,
-    enrollment_number: matricula
-  })
-
-  if (dbError) throw new Error(dbError.message)
-  return { matricula, name }
+  return apiRequest<{ matricula: string; name: string }>('/api/student/register', 'POST', { name, cpf, password })
 }
 
 export async function registerStudentByAdmin(data: any): Promise<void> {
@@ -350,34 +328,11 @@ export async function loginStudentAuth(identifier: string, password: string) {
 }
 
 export async function getStudentProfileAuth(): Promise<StudentProfile | null> {
-  const supabase = createClient()
-  const { data: { user } } = await supabase.auth.getUser()
-  if (!user) return null
-
-  // 1. First attempt by auth_user_id
-  let { data } = await supabase.from('students').select('*').eq('auth_user_id', user.id).maybeSingle()
-
-  // 2. Fallback: try by email or CPF
-  if (!data && user.email) {
-    const cleanCpf = user.email.replace('@' + BRAND.emailDomain, '').replace(/\D/g, '')
-    const { data: byEmail } = await supabase.from('students').select('*').or(`email.eq.${user.email.toLowerCase()},cpf.eq.${cleanCpf}`).maybeSingle()
-    if (byEmail) {
-      data = byEmail
-      // Auto-heal link in background
-      supabase.from('students').update({ auth_user_id: user.id }).eq('id', byEmail.id).then(() => {})
-    }
-  }
-
-  if (!data) return null
-  return {
-    ...data,
-    avatar_url: data.avatar_url
-  } as StudentProfile
+  return apiRequest<StudentProfile | null>('/api/students/me').catch(() => null)
 }
 
 export async function logoutStudentAuth() {
-  const supabase = createClient()
-  await supabase.auth.signOut()
+  await authClient.signOut()
 }
 
 export function getStudentSession(): StudentSession | null { return readLocal<StudentSession | null>(KEYS.STUDENT_SESSION, null) }
@@ -1489,14 +1444,7 @@ export async function backfillClassCurriculumFromGlobalGrade(): Promise<{ classI
 }
 
 export async function getStudents(poloId?: string): Promise<StudentProfile[]> {
-  const supabase = createClient()
-  let query = supabase
-    .from('students')
-    .select('*')
-    .order('name', { ascending: true })
-  if (poloId && poloId !== 'all') query = query.eq('polo_id', poloId)
-  const { data } = await query
-  return (data || []).map(mapStudentProfile)
+  return apiRequest<StudentProfile[]>('/api/students')
 }
 
 
@@ -1512,57 +1460,15 @@ export async function updateStudent(id: string, data: {
   status?: "pending" | "active" | "inactive"
   password?: string
 }): Promise<void> {
-  const supabase = createClient()
-
-  // Sync with Supabase Auth if password is provided
-  if (data.password || data.name) {
-    try {
-      const { data: stu } = await supabase.from('students').select('auth_user_id').eq('id', id).single()
-      if (stu?.auth_user_id) {
-        await fetch("/api/admin/users", {
-          method: "PATCH",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            id: stu.auth_user_id,
-            password: data.password,
-            name: data.name
-          })
-        })
-      }
-    } catch (err) {
-      console.error("Error syncing student with Auth:", err)
-    }
-  }
-
-  const updateData: any = {}
-  if (data.name !== undefined) updateData.name = data.name.toUpperCase().trim()
-  if (data.cpf !== undefined) updateData.cpf = data.cpf.replace(/\D/g, '')
-  if (data.phone !== undefined) updateData.phone = data.phone || null
-  if (data.address !== undefined) updateData.address = data.address || null
-  if (data.church !== undefined) updateData.church = data.church || null
-  if (data.pastor_name !== undefined) updateData.pastor_name = data.pastor_name || null
-  if (data.class_id !== undefined) updateData.class_id = data.class_id || null
-  if (data.payment_status !== undefined) updateData.payment_status = data.payment_status || null
-  if (data.status !== undefined) updateData.status = data.status
-
-  const { error } = await supabase.from('students').update(updateData).eq('id', id)
-  if (error) throw new Error(error.message)
-
-  // Trigger activation if payment_status changed to paid
-  if (data.payment_status === 'paid') {
-    const baseUrl = process.env.NEXT_PUBLIC_APP_URL || (typeof window !== "undefined" ? window.location.origin : 'https://fatec.vercel.app')
-    fetch(`${baseUrl}/api/student/activate`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ studentId: id })
-    }).catch(e => console.error("Manual Activation trigger error:", e))
-  }
+  // Observação: a troca de senha pelo admin ainda não tem equivalente no
+  // Better Auth (exigiria o plugin de administração). O campo é ignorado
+  // por enquanto; a ativação automática continua funcionando.
+  const { password, ...rest } = data
+  await apiRequest(`/api/students/${id}`, 'PATCH', rest)
 }
 
 export async function deleteStudent(id: string): Promise<void> {
-  const supabase = createClient()
-  const { error } = await supabase.from('students').delete().eq('id', id)
-  if (error) throw new Error(error.message)
+  await apiRequest(`/api/students/${id}`, 'DELETE')
 }
 
 export async function getChatMessages(disciplineId: string, studentId: string): Promise<ChatMessage[]> {
@@ -1934,112 +1840,26 @@ export async function updateProfileAvatar(
   avatarUrl: string,
   type: 'student' | 'professor' | 'board'
 ): Promise<void> {
+  if (type === 'student') {
+    await apiRequest(`/api/students/${userId}`, 'PATCH', { avatar_url: avatarUrl })
+    return
+  }
+  if (type === 'professor') {
+    await apiRequest(`/api/professors/${userId}`, 'PATCH', { avatar_url: avatarUrl })
+    return
+  }
+  // 'board' (membros do conselho) ainda não foi migrado para o Neon.
   const supabase = createClient()
-
-  // 1. Special Case: Master Professor Account
-  if (type === 'professor' && (userId === 'master' || userId === MASTER_CREDENTIALS.email)) {
-    console.log("DEBUG-V1.2.2: Atualizando Avatar do Master...");
-    const { error: masterError } = await supabase
-      .from('professor_accounts')
-      .upsert({
-        email: MASTER_CREDENTIALS.email,
-        avatar_url: avatarUrl,
-        name: MASTER_CREDENTIALS.name,
-        role: 'master',
-        active: true
-      }, { onConflict: 'email' })
-
-    if (masterError) {
-      console.error("DEBUG-V1.2.2: Erro ao dar upsert no Master:", masterError.message);
-      throw new Error("Erro ao atualizar foto do Master: " + masterError.message);
-    }
-    return;
-  }
-
-  // 2. Normal Case: Other Users
-  let table = ''
-  if (type === 'student') table = 'students'
-  else if (type === 'professor') table = 'professor_accounts'
-  else if (type === 'board') table = 'board_members'
-
-  if (!table) throw new Error("Tipo de perfil inválido para atualização de avatar.");
-
-  let success = false;
-  let lastError = "";
-
-  // Attempt 1: Update by ID
-  console.log(`DEBUG-V1.2.2: Tentando atualizar avatar na tabela ${table} por ID: ${userId}`);
-  const { data: idUpdate, error: idError } = await supabase
-    .from(table)
-    .update({ avatar_url: avatarUrl })
-    .eq('id', userId)
-    .select()
-    .maybeSingle()
-
-  if (idUpdate && !idError) {
-    success = true;
-    console.log("DEBUG-V1.2.2: Atualização por ID concluída com sucesso.");
-  } else {
-    lastError = idError?.message || "Nenhum registro encontrado por ID.";
-    console.warn("DEBUG-V1.2.2: Atualização por ID falhou ou não encontrou registro:", lastError);
-  }
-
-  // Attempt 2: Fallback to Email (for professors or students where we might have email)
-  if (!success && (type === 'professor' || type === 'student')) {
-    try {
-      const { data: { user } } = await supabase.auth.getUser();
-      const emailToTry = user?.email;
-
-      if (emailToTry) {
-        console.log(`DEBUG-V1.2.2: Tentando fallback por Email: ${emailToTry}`);
-        const { data: emailUpdate, error: emailError } = await supabase
-          .from(table)
-          .update({ avatar_url: avatarUrl })
-          .eq('email', emailToTry.toLowerCase().trim())
-          .select()
-          .maybeSingle();
-
-        if (emailUpdate && !emailError) {
-          success = true;
-          console.log("DEBUG-V1.2.2: Atualização por Email concluída com sucesso.");
-        } else {
-          lastError = emailError?.message || "Nenhum registro encontrado por Email.";
-          console.warn("DEBUG-V1.2.2: Fallback por email falhou:", lastError);
-        }
-      }
-    } catch (e: any) {
-      console.error("DEBUG-V1.2.2: Erro durante tentativa de fallback por email:", e);
-    }
-  }
-
-  if (!success) {
-    throw new Error(`Falha ao atualizar avatar em ${table}: ${lastError}`);
-  }
+  const { error } = await supabase.from('board_members').update({ avatar_url: avatarUrl }).eq('id', userId)
+  if (error) throw new Error(`Falha ao atualizar avatar: ${error.message}`)
 }
 
 export async function getStudentProfile(id: string): Promise<StudentProfile | null> {
-  const supabase = createClient()
-  const { data, error } = await supabase
-    .from('students')
-    .select('*')
-    .eq('id', id)
-    .single()
-
-  if (error) return null
-  return data as StudentProfile
+  return apiRequest<StudentProfile | null>(`/api/students/${id}`)
 }
 
 export async function getClassmates(classId: string): Promise<StudentProfile[]> {
-  const supabase = createClient()
-  const { data, error } = await supabase
-    .from('students')
-    .select('*')
-    .eq('class_id', classId)
-    .eq('status', 'active')
-    .order('name')
-
-  if (error) return []
-  return data as StudentProfile[]
+  return apiRequest<StudentProfile[]>(`/api/students/classmates?classId=${classId}`)
 }
 
 export async function getProfessorAccount(id: string): Promise<ProfessorAccount | null> {
