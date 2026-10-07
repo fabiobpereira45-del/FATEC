@@ -924,50 +924,18 @@ export async function getDisciplines(): Promise<Discipline[]> {
 }
 
 export async function getDisciplinesByProfessor(professorId: string): Promise<Discipline[]> {
-  const supabase = createClient()
-
-  // Try to find the professor account by the provided ID (UUID or custom ID)
-  // or by email if the ID is a UUID from auth
-  let internalId = professorId
-
-  const { data: profAcc } = await supabase
-    .from('professor_accounts')
-    .select('id, email')
-    .or(`id.eq.${professorId},id.eq.${professorId}`) // This is a bit redundant but safe
-    .maybeSingle()
-
-  if (!profAcc) {
-    // If not found by ID, maybe it's an auth user UUID, let's try to find by email if we can get the email from auth
-    const { data: { user } } = await supabase.auth.getUser()
-    if (user && user.id === professorId) {
-      const { data: profByEmail } = await supabase
-        .from('professor_accounts')
-        .select('id')
-        .eq('email', user.email)
-        .maybeSingle()
-      if (profByEmail) internalId = profByEmail.id
-    }
-  } else {
-    internalId = profAcc.id
-  }
-
-  const { data: links } = await supabase.from('professor_disciplines').select('discipline_id').eq('professor_id', internalId)
-  if (!links || links.length === 0) return []
-  const ids = links.map((l: any) => l.discipline_id)
-  const { data } = await supabase.from('disciplines').select('*').in('id', ids)
-  return (data || []).map(mapDiscipline)
+  const r = await apiRequest<{ data: Discipline[] }>(`/api/professor/disciplines?professorId=${professorId}&asDisciplines=1`)
+  return r.data
 }
 
 export async function getProfessorDisciplines(professorId: string): Promise<ProfessorDiscipline[]> {
-  const supabase = createClient()
-  const { data } = await supabase.from('professor_disciplines').select('*').eq('professor_id', professorId)
-  return (data || []).map(mapProfessorDiscipline)
+  const r = await apiRequest<{ data: ProfessorDiscipline[] }>(`/api/professor/disciplines?professorId=${professorId}`)
+  return r.data
 }
 
 export async function getAllProfessorDisciplines(): Promise<ProfessorDiscipline[]> {
-  const supabase = createClient()
-  const { data } = await supabase.from('professor_disciplines').select('*')
-  return (data || []).map(mapProfessorDiscipline)
+  const r = await apiRequest<{ data: ProfessorDiscipline[] }>('/api/professor/disciplines')
+  return r.data
 }
 
 export async function setProfessorFamiliarDisciplines(professorId: string, disciplineIds: string[]): Promise<void> {
@@ -1010,10 +978,7 @@ export async function setProfessorFamiliarDisciplines(professorId: string, disci
 }
 
 export async function getProfessorAccountById(id: string): Promise<ProfessorAccount | null> {
-  const supabase = createClient()
-  const { data, error } = await supabase.from('professor_accounts').select('*').eq('id', id).maybeSingle()
-  if (error || !data) return null
-  return mapProfessor(data)
+  return apiRequest<ProfessorAccount | null>(`/api/professors/${id}`)
 }
 
 // ─── Challenges ─────────────────────────────────────────────────────────────
@@ -1292,13 +1257,11 @@ export async function settleProLabore(data: {
 
 
 export async function linkProfessorToDiscipline(professorId: string, disciplineId: string): Promise<void> {
-  const supabase = createClient()
-  await supabase.from('professor_disciplines').upsert({ professor_id: professorId, discipline_id: disciplineId }, { onConflict: 'professor_id,discipline_id' })
+  await apiRequest('/api/professor/disciplines/link', 'POST', { professorId, disciplineId })
 }
 
 export async function unlinkProfessorFromDiscipline(professorId: string, disciplineId: string): Promise<void> {
-  const supabase = createClient()
-  await supabase.from('professor_disciplines').delete().match({ professor_id: professorId, discipline_id: disciplineId })
+  await apiRequest(`/api/professor/disciplines/link?professorId=${professorId}&disciplineId=${disciplineId}`, 'DELETE')
 }
 
 export async function getBoardMembers(): Promise<BoardMember[]> {
@@ -1476,176 +1439,31 @@ export async function getSubmissionByEmailAndAssessment(email: string, assessmen
 }
 
 export async function getProfessorAccounts(): Promise<ProfessorAccount[]> {
-  const supabase = createClient()
-  const { data } = await supabase.from('professor_accounts').select('*')
-  return (data || []).map(mapProfessor)
+  return apiRequest<ProfessorAccount[]>('/api/professors')
 }
 export async function addProfessorAccount(data: Omit<ProfessorAccount, "id" | "createdAt" | "passwordHash"> & { password: string }): Promise<ProfessorAccount> {
-  const nameUC = (data.name || "").toUpperCase().trim()
-  const account = { id: uid(), name: nameUC, email: data.email.toLowerCase().trim(), password_hash: hashPassword(data.password), role: data.role, created_at: new Date().toISOString() }
-  const supabase = createClient()
-  await supabase.from('professor_accounts').insert(account)
-  return mapProfessor(account)
+  return apiRequest<ProfessorAccount>('/api/professors', 'POST', data)
 }
 /**
  * Fetches a professor profile by email.
  */
 export async function getProfessorByEmail(email: string): Promise<ProfessorAccount | null> {
-  const supabase = createClient()
-  const { data, error } = await supabase
-    .from('professor_accounts')
-    .select('*')
-    .eq('email', email.toLowerCase().trim())
-    .maybeSingle()
-
-  if (error) {
-    console.error("Erro ao buscar professor por e-mail:", error)
-    return null
-  }
-
-  if (!data && email === MASTER_CREDENTIALS.email) {
-    return {
-      id: 'master',
-      name: 'Administrador Master',
-      email: MASTER_CREDENTIALS.email,
-      role: 'master',
-      active: true,
-      avatar_url: null,
-      passwordHash: '',
-      createdAt: new Date().toISOString()
-    }
-  }
-
-  return data ? mapProfessor(data) : null
+  return apiRequest<ProfessorAccount | null>(`/api/professors?email=${encodeURIComponent(email)}`)
 }
 
 export async function updateProfessorAccount(id: string, data: Partial<Pick<ProfessorAccount, "name" | "email" | "role" | "active" | "bio">> & { password?: string }): Promise<ProfessorAccount> {
-  const supabase = createClient()
-
-  if (id === "master") {
-    // For master account, we use upsert to ensure the record exists
-    const { data: dbData, error: dbError } = await supabase
-      .from('professor_accounts')
-      .upsert({
-        name: data.name,
-        email: MASTER_CREDENTIALS.email,
-        password_hash: data.password ? hashPassword(data.password) : undefined,
-        role: "master",
-        active: true
-      }, { onConflict: 'email' })
-      .select()
-      .single()
-
-    if (dbError) throw new Error("Erro no Banco (Master): " + dbError.message)
-
-    const res = await fetch("/api/admin/users", {
-      method: "PATCH",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        email: MASTER_CREDENTIALS.email,
-        password: data.password,
-        name: data.name,
-        role: "master"
-      })
-    })
-
-    if (!res.ok) {
-      const err = await res.json()
-      console.warn("Sincronização Auth Master falhou:", err)
-    }
-
-    // Fetch newly updated/created master record
-    const updatedMaster = await getProfessorByEmail(MASTER_CREDENTIALS.email)
-    if (!updatedMaster) throw new Error("Falha ao recuperar conta Master após salvamento")
-    return updatedMaster
-  }
-
-  // Get current email if not provided, to find user in Auth
-  let syncEmail = data.email
-  if (!syncEmail) {
-    const { data: current } = await supabase.from('professor_accounts').select('email').eq('id', id).single()
-    if (current) syncEmail = current.email
-  }
-
-  // Sync with Supabase Auth if password, name, or role is updated.
-  // Best-effort only: not every professor has a matching Supabase Auth user (many use the
-  // custom professor_accounts login), so a sync failure here must not block saving the
-  // actual profile data below.
-  if (syncEmail && (data.password || data.name || data.role)) {
-    try {
-      const res = await fetch("/api/admin/users", {
-        method: "PATCH",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          email: syncEmail,
-          password: data.password,
-          name: data.name,
-          role: data.role
-        })
-      })
-      if (!res.ok) {
-        const err = await res.json()
-        console.warn("Sincronização Auth falhou (perfil salvo mesmo assim):", err)
-      }
-    } catch (e) {
-      console.warn("Sincronização Auth falhou (perfil salvo mesmo assim):", e)
-    }
-  }
-
-  const updateData: any = {}
-  if (data.name !== undefined) updateData.name = data.name.toUpperCase().trim()
-  if (data.email !== undefined) updateData.email = data.email.toLowerCase().trim()
-  if (data.role !== undefined) updateData.role = data.role
-  if (data.active !== undefined) updateData.active = data.active
-  if (data.bio !== undefined) updateData.bio = data.bio
-  if (data.password !== undefined) updateData.password_hash = hashPassword(data.password)
-
-  // Try updating by ID first
-  let { data: updated, error } = await supabase.from('professor_accounts').update(updateData).eq('id', id).select().maybeSingle()
-
-  if (!updated) {
-    // If ID update fails, try by email (to handle ID mismatch cases)
-    const fallbackEmail = data.email || syncEmail
-    if (fallbackEmail) {
-      const { data: updated2, error: error2 } = await supabase.from('professor_accounts').update(updateData).eq('email', fallbackEmail.toLowerCase().trim()).select().maybeSingle()
-      if (error2) throw new Error("Erro ao atualizar por E-mail: " + error2.message)
-      if (!updated2) throw new Error("Nenhum professor encontrado com ID " + id + " ou E-mail " + fallbackEmail)
-      updated = updated2
-    } else {
-      throw new Error("Erro ao atualizar: Professor não encontrado e e-mail não disponível.")
-    }
-  }
-  return mapProfessor(updated)
+  const { password, ...rest } = data
+  return apiRequest<ProfessorAccount>(`/api/professors/${id}`, 'PATCH', rest)
 }
 
 /**
  * Ensures a professor's database ID matches their Supabase Auth ID.
  * This solves the mismatch between random uid() and Auth ID.
  */
-export async function ensureProfessorSync(email: string, authId: string): Promise<void> {
-  const supabase = createClient()
-  const { data, error } = await supabase
-    .from('professor_accounts')
-    .update({ id: authId })
-    .eq('email', email.toLowerCase().trim())
-    .neq('id', authId) // Only update if they differ
-
-  if (error) console.error("Falha ao sincronizar ID de professor:", error)
-}
 export async function deleteProfessorAccount(id: string): Promise<void> {
-  const supabase = createClient()
-  await supabase.from('professor_accounts').delete().eq('id', id)
+  await apiRequest(`/api/professors/${id}`, 'DELETE')
 }
 
-export async function authenticateProfessor(email: string, password: string): Promise<ProfessorAccount | "master" | null> {
-  const supabase = createClient()
-  const { data } = await supabase.from('professor_accounts').select('*').eq('email', email.trim().toLowerCase()).maybeSingle()
-  if (data) {
-    const acc = mapProfessor(data)
-    if (checkPassword(password, acc.passwordHash)) return acc
-  }
-  return null
-}
 
 export function calculateScore(answers: StudentAnswer[], questions: Question[], pointsPerQuestion: number) {
   let score = 0
@@ -2391,28 +2209,7 @@ export async function getClassmates(classId: string): Promise<StudentProfile[]> 
 }
 
 export async function getProfessorAccount(id: string): Promise<ProfessorAccount | null> {
-  const supabase = createClient()
-
-  if (id === 'master') {
-    const { data, error } = await supabase
-      .from('professor_accounts')
-      .select('*')
-      .eq('email', MASTER_CREDENTIALS.email)
-      .maybeSingle()
-
-    if (data) return mapProfessor(data)
-    // Fallback to hardcoded credentials if DB record doesn't exist yet
-    return { ...MASTER_CREDENTIALS, id: 'master', passwordHash: '', createdAt: new Date().toISOString() }
-  }
-
-  const { data, error } = await supabase
-    .from('professor_accounts')
-    .select('*')
-    .eq('id', id)
-    .single()
-
-  if (error) return null
-  return mapProfessor(data)
+  return apiRequest<ProfessorAccount | null>(`/api/professors/${id}`)
 }
 export async function syncStudentTuitionByDisciplines(studentId: string): Promise<void> {
   const supabase = createClient()

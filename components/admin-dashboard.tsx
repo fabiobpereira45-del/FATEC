@@ -21,7 +21,7 @@ import {
   type Assessment, type StudentSubmission, type Question, type Discipline, type StudentGrade, type StudentProfile,
   getAssessments, updateAssessment, deleteAssessment,
   getSubmissions, deleteSubmission, updateSubmissionScore,
-  getQuestions, getDisciplines, clearProfessorSession, MASTER_CREDENTIALS,
+  getQuestions, getDisciplines, clearProfessorSession,
   getProfessorSession, getStudentGrades, saveStudentGrade, deleteStudentGrade, getStudents, updateProfessorAccount,
   saveProfessorSession,
   type Semester, type StudyMaterial, type FinancialCharge, type ClassRoom, type ClassSchedule,
@@ -34,7 +34,7 @@ import { Sheet, SheetContent, SheetTrigger, SheetHeader, SheetTitle } from "@/co
 import { ScrollArea } from "@/components/ui/scroll-area"
 import { cn } from "@/lib/utils"
 import { AvatarUpload } from "@/components/avatar-upload"
-import { createClient } from "@/lib/supabase/client"
+import { authClient } from "@/lib/auth-client"
 
 const LoadingFallback = () => (
   <div className="flex flex-col items-center justify-center p-20 min-h-[60vh]">
@@ -111,7 +111,6 @@ export function AdminDashboard({ onLogout }: Props) {
 
   const [username, setUsername] = useState("")
   const [userEmail, setUserEmail] = useState("")
-  const supabase = createClient()
 
   // Improved refresh mechanism: individual tabs now manage their own fetching.
   // We provide this callback for backward compatibility and potential triggers.
@@ -121,23 +120,20 @@ export function AdminDashboard({ onLogout }: Props) {
 
   async function handleLogout() {
     clearProfessorSession()
-    await supabase.auth.signOut()
+    await authClient.signOut()
     onLogout()
   }
 
   useEffect(() => {
     async function fetchUser() {
-      const { data: { user } } = await supabase.auth.getUser()
-      if (user) {
-        setUsername(user.user_metadata?.full_name || "Professor")
-        setUserEmail(user.email || "")
-      } else if (session?.professorId === "master") {
-        setUsername(MASTER_CREDENTIALS.name)
-        setUserEmail(MASTER_CREDENTIALS.email)
+      const { data } = await authClient.getSession()
+      if (data?.user) {
+        setUsername(data.user.name || "Professor")
+        setUserEmail(data.user.email || "")
       }
     }
     fetchUser()
-  }, [supabase.auth, session?.professorId])
+  }, [session?.professorId])
 
   const menuGroups = useMemo(() => {
     return [
