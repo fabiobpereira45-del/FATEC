@@ -1,6 +1,6 @@
 import { pool } from "@/lib/db"
 import { triggerN8nWebhook } from "@/lib/n8n"
-import { BRAND } from "@/lib/brand"
+import { activateStudent } from "@/lib/repos/enrollment"
 
 export interface ChargeInput {
   studentId?: string | null
@@ -109,12 +109,7 @@ async function firePaymentSideEffects(id: string) {
   }).catch(() => {})
 
   if (charge.type === "enrollment" && charge.student_id) {
-    const baseUrl = process.env.NEXT_PUBLIC_APP_URL || BRAND.siteUrl
-    await fetch(`${baseUrl}/api/student/activate`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ studentId: charge.student_id }),
-    }).catch(e => console.error("Activation fetch error:", e))
+    await activateStudent(charge.student_id).catch(e => console.error("Activation error:", e))
   }
 }
 
