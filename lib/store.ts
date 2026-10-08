@@ -552,31 +552,11 @@ function mapChallengeSubmission(row: any): ChallengeSubmission {
 }
 
 export async function logUserActivity(log: UserLog): Promise<void> {
-  const supabase = createClient()
-  try {
-    const cleanLog = { ...log }
-    if (!cleanLog.id) delete cleanLog.id
-    
-    const { error } = await supabase.from('user_logs').insert(cleanLog)
-    if (error) {
-      console.error("Supabase Log Error:", error)
-      throw error
-    }
-  } catch (err) {
-    console.warn("Failed to log user activity:", err)
-  }
+  await apiRequest('/api/user-logs', 'POST', log).catch(err => console.warn('Failed to log user activity:', err))
 }
 
 export async function getUserLogs(limit = 100): Promise<UserLog[]> {
-  const supabase = createClient()
-  const { data, error } = await supabase
-    .from('user_logs')
-    .select('*')
-    .order('created_at', { ascending: false })
-    .limit(limit)
-  
-  if (error) throw error
-  return data || []
+  return apiRequest<UserLog[]>(`/api/user-logs?limit=${limit}`)
 }
 
 // ─── Async Supabase Operations ───────────────────────────────────────────────
@@ -1253,54 +1233,20 @@ export function calculateScore(answers: StudentAnswer[], questions: Question[], 
 }
 
 export async function getClassSchedules(poloId?: string): Promise<ClassSchedule[]> {
-  const supabase = createClient()
-  let query = supabase.from('class_schedules').select('*').order('day_of_week', { ascending: true })
-  if (poloId && poloId !== 'all') query = query.eq('polo_id', poloId)
-  const { data } = await query
-  return (data || []).map(mapClassSchedule)
+  return apiRequest<ClassSchedule[]>('/api/class-schedules')
 }
 
 export async function addClassSchedule(data: Omit<ClassSchedule, "id" | "createdAt">): Promise<void> {
-  const supabase = createClient()
-  const dbData = {
-    class_id: data.classId,
-    discipline_id: data.disciplineId,
-    professor_name: data.professorName,
-    day_of_week: data.dayOfWeek,
-    time_start: data.timeStart,
-    time_end: data.timeEnd,
-    lessons_count: data.lessonsCount,
-    workload: data.workload,
-    start_date: data.startDate || null,
-    end_date: data.endDate || null,
-    created_at: new Date().toISOString()
-  }
-  const { error } = await supabase.from('class_schedules').insert(dbData)
-  if (error) throw new Error(error.message)
+  await apiRequest('/api/class-schedules', 'POST', data)
 }
 
 export async function updateClassSchedule(id: string, data: Partial<Omit<ClassSchedule, "id" | "createdAt">>): Promise<void> {
-  const supabase = createClient()
-  const updateData: any = {}
-  if (data.classId !== undefined) updateData.class_id = data.classId
-  if (data.disciplineId !== undefined) updateData.discipline_id = data.disciplineId
-  if (data.professorName !== undefined) updateData.professor_name = data.professorName
-  if (data.dayOfWeek !== undefined) updateData.day_of_week = data.dayOfWeek
-  if (data.timeStart !== undefined) updateData.time_start = data.timeStart
-  if (data.timeEnd !== undefined) updateData.time_end = data.timeEnd
-  if (data.lessonsCount !== undefined) updateData.lessons_count = data.lessonsCount
-  if (data.workload !== undefined) updateData.workload = data.workload
-  if (data.startDate !== undefined) updateData.start_date = data.startDate || null
-  if (data.endDate !== undefined) updateData.end_date = data.endDate || null
-
-  const { error } = await supabase.from('class_schedules').update(updateData).eq('id', id)
-  if (error) throw new Error(error.message)
+  await apiRequest(`/api/class-schedules/${id}`, 'PATCH', data)
 }
 
 
 export async function deleteClassSchedule(id: string): Promise<void> {
-  const supabase = createClient()
-  await supabase.from('class_schedules').delete().eq('id', id)
+  await apiRequest(`/api/class-schedules/${id}`, 'DELETE')
 }
 
 // ─── Grade Curricular por Turma (class_curriculum) ──────────────────────────
