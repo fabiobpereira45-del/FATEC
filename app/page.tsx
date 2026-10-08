@@ -178,7 +178,7 @@ export default function HomePage() {
         {view === "landing" && (
           <div className="space-y-8">
             {/* Hero */}
-            <div className="bg-maroon-dark bg-gradient-to-br from-[#450a0a] to-[#991b1b] rounded-3xl p-8 md:p-12 text-white shadow-2xl border border-white/10 relative overflow-hidden flex flex-col md:flex-row items-center justify-between gap-10">
+            <div className="bg-maroon-dark bg-gradient-to-br from-[#0a0a0a] to-[#3d2f0a] rounded-3xl p-8 md:p-12 text-white shadow-2xl border border-white/10 relative overflow-hidden flex flex-col md:flex-row items-center justify-between gap-10">
               <div className="absolute top-0 left-0 w-96 h-96 bg-white/5 rounded-full -ml-48 -mt-48 blur-3xl" />
 
               <div className="text-left relative z-10 flex-1 space-y-4">
@@ -255,7 +255,7 @@ export default function HomePage() {
                     description: `${availableSlots !== null ? `${availableSlots} vagas restantes` : "Vagas limitadas"} para presencial e EAD. Garanta a sua.`,
                     cta: "Fazer Matrícula",
                     icon: ClipboardList,
-                    gradient: "bg-gradient-to-br from-[#450a0a] to-[#991b1b]",
+                    gradient: "bg-gradient-to-br from-[#0a0a0a] to-[#3d2f0a]",
                     onClick: () => setShowEnroll(true),
                   },
                   {
@@ -265,7 +265,7 @@ export default function HomePage() {
                     description: "Histórias reais de quem está transformando conhecimento em ministério.",
                     cta: "Ver Depoimentos",
                     icon: MessageSquareQuote,
-                    gradient: "bg-gradient-to-br from-[#2d0606] to-[#7f1d1d]",
+                    gradient: "bg-gradient-to-br from-[#000000] to-[#4a3b12]",
                     onClick: () => document.getElementById("depoimentos")?.scrollIntoView({ behavior: "smooth" }),
                   },
                 ]}
@@ -277,7 +277,7 @@ export default function HomePage() {
               {/* Apresentação do Curso / Landing Page */}
               <a
                 href="/curso"
-                className="group relative overflow-hidden bg-gradient-to-r from-[#450a0a] via-[#1e1b2e] to-[#0f172a] text-white border-2 border-amber-500/50 rounded-2xl p-6 text-left shadow-lg hover:shadow-xl hover:border-amber-400 hover:scale-[1.01] transition-all sm:col-span-2 flex items-center justify-between"
+                className="group relative overflow-hidden bg-gradient-to-r from-[#0a0a0a] via-[#1c1c1c] to-[#1c1c1c] text-white border-2 border-amber-500/50 rounded-2xl p-6 text-left shadow-lg hover:shadow-xl hover:border-amber-400 hover:scale-[1.01] transition-all sm:col-span-2 flex items-center justify-between"
               >
                 <div>
                   <div className="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full bg-amber-500/20 text-amber-300 text-xs font-bold uppercase tracking-wider mb-2 border border-amber-500/30">

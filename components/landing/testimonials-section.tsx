@@ -45,7 +45,7 @@ export function TestimonialsSection() {
       <div className="grid grid-cols-1 md:grid-cols-3 gap-5">
         {list.map((t, i) => (
           <ScrollReveal key={t.id} delay={i * 100}>
-            <div className="relative h-full rounded-2xl bg-maroon-dark bg-gradient-to-br from-[#450a0a] to-[#7f1d1d] text-white p-6 shadow-lg border border-white/10 flex flex-col">
+            <div className="relative h-full rounded-2xl bg-maroon-dark bg-gradient-to-br from-[#0a0a0a] to-[#4a3b12] text-white p-6 shadow-lg border border-white/10 flex flex-col">
               <div className="flex items-center gap-3 mb-4">
                 <div className="w-12 h-12 rounded-full overflow-hidden border-2 border-accent/40 bg-accent/20 flex items-center justify-center font-black text-sm shrink-0">
                   {t.photoUrl ? (

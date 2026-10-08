@@ -41,7 +41,7 @@ export default function CursoLandingPage() {
     <div className="min-h-screen bg-[#090d16] text-slate-100 selection:bg-amber-600 selection:text-white font-sans">
       
       {/* Barra de Aviso Superior */}
-      <div className="bg-gradient-to-r from-[#450a0a] via-[#7f1d1d] to-[#450a0a] border-b border-amber-500/20 text-center py-2 px-4 text-xs sm:text-sm font-semibold text-amber-200 tracking-wide flex items-center justify-center gap-2">
+      <div className="bg-gradient-to-r from-[#0a0a0a] via-[#4a3b12] to-[#0a0a0a] border-b border-amber-500/20 text-center py-2 px-4 text-xs sm:text-sm font-semibold text-amber-200 tracking-wide flex items-center justify-center gap-2">
         <Sparkles className="w-4 h-4 text-amber-300 animate-pulse shrink-0" />
         <span>MATRÍCULAS ABERTAS PARA A NOVA TURMA — Vagas limitadas por polo com valor promocional!</span>
       </div>
@@ -96,7 +96,7 @@ export default function CursoLandingPage() {
       {/* HERO SECTION */}
       <section className="relative pt-12 pb-20 sm:pt-20 sm:pb-32 overflow-hidden">
         {/* Background Gradients & Glows */}
-        <div className="absolute top-1/4 left-1/2 -translate-x-1/2 w-[700px] h-[500px] bg-gradient-to-tr from-[#7f1d1d]/30 via-amber-700/10 to-transparent blur-[140px] pointer-events-none -z-10" />
+        <div className="absolute top-1/4 left-1/2 -translate-x-1/2 w-[700px] h-[500px] bg-gradient-to-tr from-[#4a3b12]/30 via-amber-700/10 to-transparent blur-[140px] pointer-events-none -z-10" />
         <div className="absolute top-10 left-10 w-96 h-96 bg-blue-950/40 rounded-full blur-[120px] pointer-events-none -z-10" />
 
         <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
@@ -150,7 +150,7 @@ export default function CursoLandingPage() {
             {/* Logo em destaque */}
             <div className="lg:col-span-5 flex justify-center">
               <div className="relative group w-full max-w-xs">
-                <div className="absolute -inset-1 bg-gradient-to-r from-amber-600 to-[#7f1d1d] rounded-3xl blur-xl opacity-40 group-hover:opacity-60 transition duration-500" />
+                <div className="absolute -inset-1 bg-gradient-to-r from-amber-600 to-[#4a3b12] rounded-3xl blur-xl opacity-40 group-hover:opacity-60 transition duration-500" />
                 <div className="relative rounded-2xl border-2 border-amber-500/40 bg-[#0d1527] shadow-2xl p-10 flex items-center justify-center aspect-square">
                   <img
                     src="/FATEC.png"
@@ -310,7 +310,7 @@ export default function CursoLandingPage() {
             return (
               <div
                 key={faq.question}
-                className="rounded-2xl border border-white/10 bg-[#0f172a]/60 overflow-hidden transition-colors"
+                className="rounded-2xl border border-white/10 bg-[#1c1c1c]/60 overflow-hidden transition-colors"
               >
                 <button
                   onClick={() => setOpenFaq(isOpen ? null : index)}
@@ -335,7 +335,7 @@ export default function CursoLandingPage() {
       </section>
 
       {/* BANNER FINAL CTA */}
-      <section className="py-16 bg-gradient-to-r from-[#450a0a] via-[#1e293b] to-[#0f172a] border-t border-amber-500/30">
+      <section className="py-16 bg-gradient-to-r from-[#0a0a0a] via-[#1c1c1c] to-[#1c1c1c] border-t border-amber-500/30">
         <div className="max-w-5xl mx-auto px-4">
           <div className="grid grid-cols-1 lg:grid-cols-3 gap-8 items-center">
             
