@@ -7,16 +7,14 @@ import {
   GraduationCap,
   CheckCircle2,
   ChevronRight,
-  Award,
   Sparkles,
   ArrowRight,
-  Phone,
 } from "lucide-react"
 
 const FAQS = [
   {
-    question: "Como funciona o pagamento da mensalidade de R$ 79,99?",
-    answer: "A mensalidade da FATEC é de valor fixo e acessível (apenas R$ 79,99 mensais). O pagamento pode ser feito com total comodidade via PIX, Cartão de Crédito ou Boleto bancário através da nossa área financeira segura."
+    question: "Como funciona o pagamento da mensalidade?",
+    answer: "Os valores de matrícula e mensalidade são informados na área de inscrição. O pagamento pode ser feito com total comodidade via PIX, Cartão de Crédito ou Boleto bancário através da nossa área financeira segura."
   },
   {
     question: "O curso é voltado apenas para pastores ou qualquer membro?",
@@ -120,26 +118,6 @@ export default function CursoLandingPage() {
                 O <strong>Faculdade de Teologia e Cultura (FATEC)</strong> capacita líderes, obreiros e estudantes da Palavra com fidelidade exegética, ortodoxia teológica e prática eclesiástica transformadora.
               </p>
 
-              {/* Destaque da Mensalidade Hero */}
-              <div className="p-4 sm:p-5 rounded-2xl bg-gradient-to-r from-[#172033] to-[#1e131d] border border-amber-500/30 shadow-2xl flex flex-col sm:flex-row items-center justify-between gap-4">
-                <div className="flex items-center gap-3.5">
-                  <div className="w-12 h-12 rounded-xl bg-amber-500/20 border border-amber-500/40 flex items-center justify-center text-amber-400 shrink-0">
-                    <Award className="w-6 h-6" />
-                  </div>
-                  <div className="text-left">
-                    <div className="text-xs uppercase tracking-wider text-amber-300/80 font-bold">Investimento Acessível</div>
-                    <div className="flex items-baseline gap-1.5">
-                      <span className="text-2xl sm:text-3xl font-black text-white">R$ 79,99</span>
-                      <span className="text-xs sm:text-sm text-slate-400 font-medium">/ mês</span>
-                    </div>
-                  </div>
-                </div>
-                <div className="text-xs text-slate-300 text-center sm:text-right space-y-1">
-                  <div className="text-[11px] text-slate-400">18 mensalidades · R$ 79,99/mês</div>
-                  <div className="text-[11px] text-amber-400/80">+ Taxa de matrícula: R$ 79,99 (única)</div>
-                </div>
-              </div>
-
               {/* CTA Buttons */}
               <div className="flex flex-col sm:flex-row items-center justify-center lg:justify-start gap-4 pt-2">
                 <Link
@@ -149,14 +127,6 @@ export default function CursoLandingPage() {
                   <span>Matricule-se Já</span>
                   <ArrowRight className="w-5 h-5" />
                 </Link>
-              </div>
-
-              {/* Contato */}
-              <div className="flex flex-wrap items-center justify-center lg:justify-start gap-4 pt-2 text-xs text-slate-400">
-                <a href="tel:71987483103" className="flex items-center gap-1.5 hover:text-amber-300 transition-colors">
-                  <Phone className="w-3.5 h-3.5 text-amber-400" />
-                  <span>(71) 98748-3103</span>
-                </a>
               </div>
 
               {/* Selos de Confiança */}
@@ -210,9 +180,9 @@ export default function CursoLandingPage() {
               <div className="text-[11px] text-slate-500">Grade curricular balanceada</div>
             </div>
             <div className="space-y-1">
-              <div className="text-3xl sm:text-4xl font-black text-amber-400">R$ 79,99</div>
-              <div className="text-xs sm:text-sm font-semibold text-slate-300">Mensalidade Única</div>
-              <div className="text-[11px] text-slate-500">Valor fixo sem reajustes ocultos</div>
+              <div className="text-3xl sm:text-4xl font-black text-amber-400">✓</div>
+              <div className="text-xs sm:text-sm font-semibold text-slate-300">Certificado Reconhecido</div>
+              <div className="text-[11px] text-slate-500">Emitido ao final do curso</div>
             </div>
             <div className="space-y-1">
               <div className="text-3xl sm:text-4xl font-black text-amber-400">100%</div>
@@ -250,33 +220,12 @@ export default function CursoLandingPage() {
               <div className="text-sm font-semibold text-slate-400 uppercase tracking-widest">
                 Mensalidade Regular do Curso
               </div>
-              <div className="flex items-center justify-center gap-2 my-4">
-                <span className="text-2xl sm:text-3xl font-bold text-amber-400">R$</span>
-                <span className="text-6xl sm:text-7xl font-black text-white tracking-tight">79</span>
-                <div className="text-left">
-                  <span className="text-2xl sm:text-3xl font-black text-white">,99</span>
-                  <span className="block text-xs text-slate-400 font-medium">/ ao mês</span>
-                </div>
-              </div>
-              <p className="text-xs text-amber-300 font-medium mb-4">
-                Sem taxa surpresa • Sem fidelidade abusiva • Acesso a todas as 18 disciplinas
+              <p className="text-base text-slate-300 mt-4 mb-2 max-w-md mx-auto">
+                Consulte os valores de matrícula e mensalidade na área de inscrição.
               </p>
-
-              {/* Detalhamento de pagamento */}
-              <div className="bg-[#0a0f1c] border border-white/10 rounded-2xl p-4 text-left space-y-2 text-xs text-slate-400">
-                <div className="font-semibold text-slate-300 text-sm mb-3">Resumo do investimento total:</div>
-                <div className="flex items-center justify-between border-b border-white/5 pb-2">
-                  <span>18 mensalidades de R$ 79,99</span>
-                  <span className="text-white font-bold">R$ 1.439,82</span>
-                </div>
-                <div className="flex items-center justify-between">
-                  <span>Taxa de matrícula <span className="text-amber-400/80">(única, não recorrente)</span></span>
-                  <span className="text-white font-bold">R$ 79,99</span>
-                </div>
-                <div className="mt-3 pt-2 border-t border-white/10 text-[11px] text-slate-500 leading-relaxed">
-                  * As mensalidades correspondem às 18 disciplinas distribuídas em 3 semestres (6 disciplinas por semestre). A taxa de matrícula é paga uma única vez no ato da inscrição.
-                </div>
-              </div>
+              <p className="text-xs text-amber-300 font-medium mb-4">
+                Sem taxa surpresa • Sem fidelidade abusiva
+              </p>
             </div>
 
             {/* Material Didático */}
@@ -398,18 +347,12 @@ export default function CursoLandingPage() {
               <p className="text-slate-300 text-sm sm:text-base">
                 As turmas estão com matrículas abertas. Garanta sua vaga e comece a estudar com quem ama e ensina a Palavra com profundidade.
               </p>
-              <div className="flex flex-wrap items-center justify-center lg:justify-start gap-3 text-sm">
-                <a href="tel:71987483103" className="flex items-center gap-2 text-amber-300 hover:text-amber-200 font-semibold">
-                  <Phone className="w-4 h-4" />
-                  <span>(71) 98748-3103</span>
-                </a>
-              </div>
               <div className="flex flex-col sm:flex-row items-center justify-center lg:justify-start gap-4 pt-1">
                 <Link
                   href="/registrar"
                   className="w-full sm:w-auto inline-flex items-center justify-center gap-2 bg-amber-500 hover:bg-amber-400 text-slate-950 font-black px-8 py-4 rounded-xl text-base shadow-xl transition-all"
                 >
-                  <span>Matricule-se Já — R$ 79,99/mês</span>
+                  <span>Matricule-se Já</span>
                   <ArrowRight className="w-5 h-5" />
                 </Link>
                 <Link
@@ -463,11 +406,6 @@ export default function CursoLandingPage() {
 
             {/* Contato */}
             <div className="flex flex-col sm:flex-row items-center gap-4 text-[12px]">
-              <a href="tel:71987483103" className="flex items-center gap-1.5 text-slate-400 hover:text-amber-300 transition-colors">
-                <Phone className="w-3.5 h-3.5 text-amber-500/70" />
-                <span>(71) 98748-3103</span>
-              </a>
-              <div className="hidden sm:block h-3 w-px bg-slate-700" />
               <a href="https://fatec-rho.vercel.app" target="_blank" rel="noopener noreferrer" className="text-amber-500/70 hover:text-amber-400 transition-colors">
                 fatec-rho.vercel.app
               </a>
