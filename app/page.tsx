@@ -186,11 +186,11 @@ export default function HomePage() {
                   Curso de Teologia Bíblica
                 </div>
                 <h1 className="text-4xl md:text-5xl font-extrabold tracking-tight leading-tight">
-                  Instituto de Ensino <br /> Teológico <span className="text-accent">FATEC</span>
+                  Faculdade de <br /> Teologia e Cultura <span className="text-accent">FATEC</span>
                 </h1>
                 <div className="h-1.5 w-20 bg-accent rounded-full opacity-60" />
                 <p className="text-white/80 text-lg font-serif italic max-w-lg">
-                  "Veritas • Sapientia • Fides"
+                  "Aleteia • Sophia • Pistis"
                 </p>
                 <div className="pt-4 flex flex-col lg:flex-row gap-6 items-start lg:items-center">
                   <div className="flex gap-4 items-center">
