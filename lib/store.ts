@@ -1,4 +1,3 @@
-import { createClient } from "@/lib/supabase/client"
 // CACHE-BUSTER: v1.2.2-cloud - 2026-03-13 19:26
 import { triggerN8nWebhook } from "@/lib/n8n"
 import { BRAND } from "@/lib/brand"
@@ -708,42 +707,7 @@ export async function getAllProfessorDisciplines(): Promise<ProfessorDiscipline[
 }
 
 export async function setProfessorFamiliarDisciplines(professorId: string, disciplineIds: string[]): Promise<void> {
-  try {
-    const res = await fetch('/api/professor/disciplines', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ professorId, disciplineIds })
-    })
-
-    if (res.ok) {
-      const data = await res.json()
-      if (data.success) return
-      throw new Error(data.error || "Erro ao salvar preferências")
-    }
-
-    const errData = await res.json().catch(() => ({}))
-    throw new Error(errData.error || `Erro HTTP ${res.status}`)
-  } catch (apiError: any) {
-    console.warn("Tentando fallback direto ao Supabase:", apiError?.message)
-    const supabase = createClient()
-    
-    // Remove existing links for this professor
-    const { error: delError } = await supabase.from('professor_disciplines').delete().eq('professor_id', professorId)
-    if (delError) {
-      console.error("Erro no delete direto:", delError)
-    }
-
-    // Insert new links
-    if (disciplineIds && disciplineIds.length > 0) {
-      const rows = disciplineIds.map(disciplineId => ({
-        professor_id: professorId,
-        discipline_id: disciplineId,
-        created_at: new Date().toISOString()
-      }))
-      const { error } = await supabase.from('professor_disciplines').insert(rows)
-      if (error) throw new Error(error.message || apiError.message)
-    }
-  }
+  await apiRequest('/api/professor/disciplines', 'POST', { professorId, disciplineIds })
 }
 
 export async function getProfessorAccountById(id: string): Promise<ProfessorAccount | null> {
@@ -1236,40 +1200,6 @@ export async function reorderClassCurriculum(orderedItemIds: string[]): Promise<
   await apiRequest('/api/class-curriculum/reorder', 'POST', { ids: orderedItemIds })
 }
 
-// Resolve a grade "global" atual (mesma lógica antes usada por syncStudentTuitionByDisciplines),
-// usada como modelo/base pelo botão "Copiar da grade global" e como fallback para turmas que
-// ainda não têm grade própria cadastrada em class_curriculum.
-async function resolveGlobalGradeDisciplines(modality: string, poloId?: string | null): Promise<Discipline[]> {
-  const supabase = createClient()
-  const semesterModality = (modality === 'online' || modality === 'semi_presencial') ? 'semi_presencial' : 'presencial'
-
-  const [semestersResult, disciplinesResult] = await Promise.all([
-    supabase.from('semesters').select('*').eq('modality', semesterModality).order('order', { ascending: true }),
-    supabase.from('disciplines').select('*')
-  ])
-
-  let semesters = semestersResult.data || []
-  if (poloId) {
-    const ownPoloSemesters = semesters.filter((s: any) => s.polo_id === poloId)
-    semesters = ownPoloSemesters.length > 0 ? ownPoloSemesters : semesters.filter((s: any) => !s.polo_id)
-  }
-  const semesterIds = new Set(semesters.map((s: any) => s.id))
-
-  const disciplines = (disciplinesResult.data || [])
-    .filter((d: any) => d.semester_id && semesterIds.has(d.semester_id))
-    .map(mapDiscipline)
-    .sort((a: any, b: any) => {
-      const semA = semesters.find((s: any) => s.id === a.semesterId)
-      const semB = semesters.find((s: any) => s.id === b.semesterId)
-      const semOrderA = semA?.order ?? 999
-      const semOrderB = semB?.order ?? 999
-      if (semOrderA !== semOrderB) return semOrderA - semOrderB
-      return a.order - b.order
-    })
-
-  return disciplines
-}
-
 // Copia a grade global atual (por modalidade/polo) para a grade própria de uma turma.
 // Usado tanto pelo botão "Copiar da grade global" na UI quanto pela migração inicial das turmas já existentes.
 export async function copyGlobalGradeToClass(classId: string): Promise<number> {
@@ -1329,7 +1259,6 @@ export async function getAttendances(disciplineId: string, poloId?: string): Pro
 }
 
 export async function getAttendanceAnalysis(disciplineId: string, students: StudentProfile[]) {
-  const supabase = createClient()
   const records = await getAttendances(disciplineId)
 
   const stats = {
@@ -1579,49 +1508,6 @@ export async function updateFinancialCharge(id: string, data: {
 
 // %%% EAD Lessons & Live Classroom Hub %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 
-function parseEadMetadata(rawDescription?: string | null): { cleanDescription: string; meta: any } {
-  if (!rawDescription) return { cleanDescription: '', meta: {} }
-  const metaRegex = /<!--EAD_META:([\s\S]*?)-->/
-  const match = rawDescription.match(metaRegex)
-  if (match && match[1]) {
-    try {
-      const meta = JSON.parse(match[1])
-      const cleanDescription = rawDescription.replace(metaRegex, '').trim()
-      return { cleanDescription, meta }
-    } catch {
-      return { cleanDescription: rawDescription, meta: {} }
-    }
-  }
-  return { cleanDescription: rawDescription, meta: {} }
-}
-
-function buildEadDescription(description?: string, meta?: any): string {
-  const base = description ? description.trim() : ''
-  if (!meta || Object.keys(meta).length === 0) return base
-  return `${base}\n\n<!--EAD_META:${JSON.stringify(meta)}-->`.trim()
-}
-
-function mapEadLesson(row: any): EadLesson {
-  const { cleanDescription, meta } = parseEadMetadata(row.description)
-  
-  return {
-    id: row.id,
-    disciplineId: row.discipline_id,
-    title: row.title,
-    description: cleanDescription,
-    videoUrl: row.video_url || row.meet_url || meta.meetUrl || '',
-    coverUrl: row.cover_url || meta.coverUrl || undefined,
-    orderIndex: row.order_index,
-    availableFrom: row.available_from,
-    availableUntil: row.available_until,
-    lessonType: row.lesson_type || meta.lessonType || (row.video_url?.includes('meet.google.com') ? 'live_meet' : 'recorded'),
-    meetUrl: row.meet_url || meta.meetUrl || (row.video_url?.includes('meet.google.com') ? row.video_url : undefined),
-    liveDate: row.live_date || meta.liveDate || (row.available_from ? row.available_from.substring(0, 10) : undefined),
-    minMinutesForPresence: row.min_minutes !== undefined ? row.min_minutes : (meta.minMinutesForPresence !== undefined ? meta.minMinutesForPresence : 0),
-    createdAt: row.created_at
-  }
-}
-
 // Helper function to compress images before upload to ensure fast loading and prevent payload size limits
 export async function compressImageFile(file: File, maxWidth = 1280, maxHeight = 720, quality = 0.85): Promise<File> {
   if (typeof window === "undefined" || !file.type.startsWith("image/")) return file
@@ -1691,22 +1577,7 @@ export async function uploadEadCover(file: File): Promise<string> {
       if (data.url) return data.url
     }
 
-    // 3. Fallback to direct client upload if API endpoint failed
-    const supabase = createClient()
-    const fileExt = compressed.name.split('.').pop() || 'jpg'
-    const fileName = `ead-cover-${Date.now()}-${Math.random().toString(36).slice(2)}.${fileExt}`
-    const filePath = `ead/${fileName}`
-
-    const { error: uploadError } = await supabase.storage
-      .from('avatars')
-      .upload(filePath, compressed, { cacheControl: '3600', upsert: true })
-
-    if (!uploadError) {
-      const { data } = supabase.storage.from('avatars').getPublicUrl(filePath)
-      if (data?.publicUrl) return data.publicUrl
-    }
-
-    // 4. Final lightweight fallback (compressed base64 data URL)
+    // 3. Fallback final (base64 comprimido), caso o upload para o Blob falhe
     return new Promise((resolve, reject) => {
       const reader = new FileReader()
       reader.onload = () => resolve(reader.result as string)
@@ -1739,18 +1610,9 @@ async function safeExtractErrorMessage(res: Response, fallbackMsg: string): Prom
 }
 
 export async function getEadLessons(disciplineId: string): Promise<EadLesson[]> {
-  try {
-    const res = await fetch(`/api/admin/ead?disciplineId=${encodeURIComponent(disciplineId)}`)
-    if (res.ok) {
-      const json = await res.json()
-      if (json.data) return json.data.map(mapEadLesson)
-    }
-  } catch (err) {
-    console.warn("API GET /api/admin/ead failed, falling back to direct client", err)
-  }
-  const supabase = createClient()
-  const { data } = await supabase.from('ead_lessons').select('*').eq('discipline_id', disciplineId).order('order_index', { ascending: true })
-  return (data || []).map(mapEadLesson)
+  // A API devolve os dados já no formato final (lib/repos/ead.ts), sem precisar de mapEadLesson.
+  const json = await apiRequest<{ data: EadLesson[] }>(`/api/admin/ead?disciplineId=${encodeURIComponent(disciplineId)}`)
+  return json.data || []
 }
 
 export async function addEadLesson(lesson: Omit<EadLesson, 'id' | 'createdAt'>): Promise<void> {
@@ -1788,27 +1650,6 @@ export async function deleteEadLesson(id: string): Promise<void> {
 }
 
 // ─── EAD Live Class Heartbeat & Attendance Tracking ───────────────────────────
-
-const LOCAL_LIVE_TRACKING_KEY = 'fatec_ead_live_tracking_v1'
-
-function getLocalLiveTracking(): EadLiveTracking[] {
-  if (typeof window === 'undefined') return []
-  try {
-    const raw = localStorage.getItem(LOCAL_LIVE_TRACKING_KEY)
-    return raw ? JSON.parse(raw) : []
-  } catch {
-    return []
-  }
-}
-
-function saveLocalLiveTracking(list: EadLiveTracking[]) {
-  if (typeof window === 'undefined') return
-  try {
-    localStorage.setItem(LOCAL_LIVE_TRACKING_KEY, JSON.stringify(list))
-  } catch (err) {
-    console.error('Error saving local live tracking:', err)
-  }
-}
 
 export async function recordLiveSessionJoin(
   lessonId: string,
