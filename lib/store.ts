@@ -1273,47 +1273,15 @@ async function resolveGlobalGradeDisciplines(modality: string, poloId?: string |
 // Copia a grade global atual (por modalidade/polo) para a grade própria de uma turma.
 // Usado tanto pelo botão "Copiar da grade global" na UI quanto pela migração inicial das turmas já existentes.
 export async function copyGlobalGradeToClass(classId: string): Promise<number> {
-  const supabase = createClient()
-  const { data: cls } = await supabase.from('classes').select('modality, polo_id').eq('id', classId).maybeSingle()
-  if (!cls) throw new Error('Turma não encontrada.')
-
-  const disciplines = await resolveGlobalGradeDisciplines(cls.modality || 'presencial', cls.polo_id)
-  if (disciplines.length === 0) return 0
-
-  const { data: existing } = await supabase.from('class_curriculum').select('discipline_id').eq('class_id', classId)
-  const existingIds = new Set((existing || []).map((r: any) => r.discipline_id))
-
-  const rows = disciplines
-    .filter(d => !existingIds.has(d.id))
-    .map((d, index) => ({
-      class_id: classId,
-      discipline_id: d.id,
-      order: existingIds.size + index,
-      application_month: d.applicationMonth || null,
-      application_year: d.applicationYear || null,
-      is_concluded: d.isConcluded || false,
-      created_at: new Date().toISOString()
-    }))
-
-  if (rows.length === 0) return 0
-  const { error } = await supabase.from('class_curriculum').insert(rows)
-  if (error) throw new Error(error.message)
-  return rows.length
+  const r = await apiRequest<{ inserted: number }>('/api/admin/sync', 'POST', { action: 'copyGlobalGradeToClass', classId })
+  return r.inserted
 }
 
 // Migração de conveniência: copia a grade global para TODAS as turmas que ainda não têm
 // nenhuma linha em class_curriculum. Roda uma única vez a partir de um botão admin.
 export async function backfillClassCurriculumFromGlobalGrade(): Promise<{ classId: string; className: string; inserted: number }[]> {
-  const supabase = createClient()
-  const { data: classes } = await supabase.from('classes').select('id, name')
-  const results: { classId: string; className: string; inserted: number }[] = []
-  for (const c of (classes || [])) {
-    const { count } = await supabase.from('class_curriculum').select('id', { count: 'exact', head: true }).eq('class_id', c.id)
-    if (count && count > 0) continue
-    const inserted = await copyGlobalGradeToClass(c.id)
-    results.push({ classId: c.id, className: c.name, inserted })
-  }
-  return results
+  const r = await apiRequest<{ results: { classId: string; className: string; inserted: number }[] }>('/api/admin/sync', 'POST', { action: 'backfillClassCurriculum' })
+  return r.results
 }
 
 export async function getStudents(poloId?: string): Promise<StudentProfile[]> {
@@ -1482,49 +1450,14 @@ export async function getStudentGrades(poloId?: string): Promise<StudentGrade[]>
  * based on the identifier (CPF/Email).
  */
 export async function syncStudentGrades(studentId: string, cpf?: string, email?: string, enrollmentNumber?: string): Promise<{ affected: number }> {
-  const supabase = createClient()
-  const cleanCpf = cpf?.replace(/\D/g, '') || ""
-
-  // Find records that don't have student_id but match CPF, Email, or Enrollment Number
-  let query = supabase.from('student_grades')
-    .select('id')
-    .is('student_id', null)
-
-  const conditions = []
-  if (cleanCpf) conditions.push(`student_identifier.eq.${cleanCpf}`)
-  if (email) conditions.push(`student_identifier.eq.${email.toLowerCase().trim()}`)
-  if (enrollmentNumber) conditions.push(`student_identifier.eq.${enrollmentNumber}`)
-
-  if (conditions.length === 0) return { affected: 0 }
-
-  const { data: orphans } = await query.or(conditions.join(','))
-
-  if (!orphans || orphans.length === 0) return { affected: 0 }
-
-  const ids = orphans.map((o: any) => o.id)
-  const { error } = await supabase.from('student_grades')
-    .update({ student_id: studentId })
-    .in('id', ids)
-
-  if (error) {
-    console.error("Error during grade sync:", error)
-    return { affected: 0 }
-  }
-
-  return { affected: ids.length }
+  return apiRequest<{ affected: number }>('/api/admin/sync', 'POST', { action: 'syncStudentGrades', studentId, cpf, email, enrollmentNumber })
 }
 
 /**
  * Bulk repairs grade records for all students.
  */
 export async function bulkSyncGrades(): Promise<{ totalAffected: number }> {
-  const students = await getStudents()
-  let totalAffected = 0
-  for (const student of students) {
-    const { affected } = await syncStudentGrades(student.id, student.cpf, student.email, student.enrollment_number)
-    totalAffected += affected
-  }
-  return { totalAffected }
+  return apiRequest<{ totalAffected: number }>('/api/admin/sync', 'POST', { action: 'bulkSyncGrades' })
 }
 
 /**
@@ -1539,34 +1472,8 @@ export async function saveStudentGrade(grade: Omit<StudentGrade, 'id' | 'created
 }
 
 export async function getAvailableSlots(): Promise<number> {
-  const supabase = createClient()
-
-  // Get total capacity from classes
-  const { data: classesData, error: classesError } = await supabase
-    .from('classes')
-    .select('max_students')
-
-  if (classesError) {
-    console.error("Error fetching classes capacity:", classesError)
-    return 0
-  }
-
-  const totalCapacity = classesData.reduce((acc: number, curr: any) => acc + (curr.max_students || 0), 0)
-
-  // Get current student count
-  const { count, error: studentsError } = await supabase
-    .from('students')
-    .select('*', { count: 'exact', head: true })
-
-  if (studentsError) {
-    console.error("Error fetching student count:", studentsError)
-    return 0
-  }
-
-  const currentStudents = count || 0
-  const available = totalCapacity - currentStudents
-
-  return available > 0 ? available : 0
+  const r = await apiRequest<{ available: number }>('/api/admin/sync?action=availableSlots')
+  return r.available
 }
 
 
@@ -1599,71 +1506,7 @@ export function calculateGlobalAverage(grade: StudentGrade, settings: GradeSetti
  * based on the current presenceValue in settings.
  */
 export async function syncAllAttendanceScores(): Promise<void> {
-  const supabase = createClient()
-  console.log("🚀 [Sync] Iniciando sincronização robusta...");
-  
-  const { data: students } = await supabase.from('students').select('id, name, email, cpf')
-  if (!students) return
-  const studentById: Record<string, any> = {}
-  students.forEach((s: any) => { studentById[s.id] = s })
-
-  const { data: allAtt } = await supabase.from('attendances').select('student_id, discipline_id').eq('is_present', true)
-  if (!allAtt) return
-
-  const counts: Record<string, number> = {}
-  allAtt.forEach((a: any) => {
-    if (!a.student_id || !a.discipline_id) return
-    const key = `${a.student_id}:${a.discipline_id}`
-    counts[key] = (counts[key] || 0) + 1
-  })
-
-  for (const [key, rawCount] of Object.entries(counts)) {
-    const [studentId, disciplineId] = key.split(':')
-    const score = Math.min(rawCount * 2.5, 10.0)
-    const student = studentById[studentId]
-    if (!student) continue
-
-    const cleanCpf = student.cpf ? student.cpf.replace(/\D/g, '') : null
-
-    const { data: existingGrades } = await supabase.from('student_grades').select('id, student_identifier, student_id').eq('discipline_id', disciplineId)
-    
-    let updatedAny = false
-    if (existingGrades && existingGrades.length > 0) {
-      for (const grade of existingGrades) {
-        let isMatch = false
-        if (grade.student_id === studentId) isMatch = true
-        else if (grade.student_identifier) {
-          const ident = grade.student_identifier.toLowerCase().trim()
-          const cleanIdent = ident.replace(/\D/g, '')
-          if (ident === student.email?.toLowerCase().trim()) isMatch = true
-          else if (cleanCpf && cleanIdent === cleanCpf) isMatch = true
-        }
-        if (isMatch) {
-          await supabase.from('student_grades').update({ attendance_score: score, student_id: studentId }).eq('id', grade.id)
-          updatedAny = true
-        }
-      }
-    }
-
-    if (!updatedAny) {
-      // Create missing grade record
-      await supabase.from('student_grades').insert({
-        student_id: studentId,
-        student_name: student.name,
-        student_identifier: student.email || student.cpf || studentId,
-        discipline_id: disciplineId,
-        attendance_score: score,
-        exam_grade: 0,
-        works_grade: 0,
-        seminar_grade: 0,
-        participation_bonus: 0,
-        custom_divisor: 2,
-        is_public: false,
-        created_at: new Date().toISOString()
-      })
-    }
-  }
-  console.log("✅ [Sync] Sincronização concluída.");
+  await apiRequest('/api/admin/sync', 'POST', { action: 'syncAllAttendanceScores' })
 }
 
 // ─── Profile / Avatar Management ──────────────────────────────────────────
@@ -1692,10 +1535,7 @@ export async function updateProfileAvatar(
     await apiRequest(`/api/professors/${userId}`, 'PATCH', { avatar_url: avatarUrl })
     return
   }
-  // 'board' (membros do conselho) ainda não foi migrado para o Neon.
-  const supabase = createClient()
-  const { error } = await supabase.from('board_members').update({ avatar_url: avatarUrl }).eq('id', userId)
-  if (error) throw new Error(`Falha ao atualizar avatar: ${error.message}`)
+  await apiRequest(`/api/board-members/${userId}`, 'PATCH', { avatar_url: avatarUrl })
 }
 
 export async function getStudentProfile(id: string): Promise<StudentProfile | null> {
@@ -1710,195 +1550,7 @@ export async function getProfessorAccount(id: string): Promise<ProfessorAccount 
   return apiRequest<ProfessorAccount | null>(`/api/professors/${id}`)
 }
 export async function syncStudentTuitionByDisciplines(studentId: string): Promise<void> {
-  const supabase = createClient()
-
-  // 1. Get Student and their Class
-  const { data: student } = await supabase.from('students').select('class_id, created_at, modality, polo_id').eq('id', studentId).single()
-  if (!student) return
-
-  // Determine modality: if student has modality, or get class modality
-  let studentModality: string = student.modality || 'presencial'
-  if (student.class_id) {
-    const { data: cls } = await supabase
-      .from('classes')
-      .select('id, modality')
-      .eq('id', student.class_id)
-      .maybeSingle()
-    if (cls?.modality) {
-      studentModality = cls.modality
-    }
-  }
-
-  // 2. Grade curricular: cada turma tem sua própria sequência de disciplinas/meses
-  // (class_curriculum). Turmas que ainda não têm grade própria cadastrada caem no
-  // fallback da grade global por modalidade, para não quebrar cobranças já existentes.
-  let disciplines: Discipline[] = []
-  if (student.class_id) {
-    const curriculumItems = await getClassCurriculum(student.class_id)
-    if (curriculumItems.length > 0) {
-      const { data: allDisciplineRows } = await supabase.from('disciplines').select('*')
-      const disciplineById = new Map<string, Discipline>((allDisciplineRows || []).map((d: any) => [d.id, mapDiscipline(d)]))
-      disciplines = curriculumItems
-        .map(item => {
-          const disc = disciplineById.get(item.disciplineId)
-          if (!disc) return null
-          return {
-            ...disc,
-            applicationMonth: item.applicationMonth ?? disc.applicationMonth,
-            applicationYear: item.applicationYear ?? disc.applicationYear,
-            isConcluded: item.isConcluded ?? disc.isConcluded,
-          } as Discipline
-        })
-        .filter((d): d is Discipline => !!d)
-    }
-  }
-
-  if (disciplines.length === 0) {
-    disciplines = await resolveGlobalGradeDisciplines(studentModality, student.polo_id)
-  }
-
-  if (disciplines.length === 0) return
-
-  const monthMap: Record<string, number> = {
-    'Jan': 1, 'Fev': 2, 'Mar': 3, 'Abr': 4, 'Mai': 5, 'Jun': 6,
-    'Jul': 7, 'Ago': 8, 'Set': 9, 'Out': 10, 'Nov': 11, 'Dez': 12
-  }
-
-  // 3. Get Settings
-  const settings = await getFinancialSettings()
-  if (!settings) return
-
-  // Every polo shares the same base fee. Polo-specific reductions (e.g. Salvador's discount)
-  // are applied afterwards via the financial manager's bulk discount tool, not hardcoded here.
-  const activeEnrollmentFee = settings.enrollmentFee
-  const activeMonthlyFee = settings.monthlyFee
-
-  const charges: any[] = []
-
-  // 4. Add Enrollment Fee (Taxa de Matrícula) - ALWAYS FIRST
-  const enrollmentDate = new Date(student.created_at || Date.now())
-  enrollmentDate.setHours(0, 0, 0, 0)
-
-  charges.push({
-    student_id: studentId,
-    type: 'enrollment',
-    description: studentModality === 'online' ? 'Taxa de Matrícula (Online)' : 'Taxa de Matrícula',
-    amount: activeEnrollmentFee,
-    due_date: enrollmentDate.toISOString().split('T')[0],
-    status: 'pending',
-    created_at: new Date().toISOString()
-  })
-
-  // 5. Add Discipline-based Monthly Fees (Exactly 18)
-  disciplines.forEach((disp: any) => {
-    let year = parseInt(disp.applicationYear || "2026")
-    let monthNum = 1
-
-    if (disp.applicationMonth) {
-      if (monthMap[disp.applicationMonth]) {
-        monthNum = monthMap[disp.applicationMonth]
-      } else {
-        monthNum = parseInt(disp.applicationMonth) || 1
-      }
-    }
-
-    const dueDate = new Date(year, monthNum - 1, 10)
-
-    charges.push({
-      student_id: studentId,
-      type: 'monthly',
-      description: `Mensalidade: ${disp.name}`,
-      discipline_id: disp.id,
-      amount: activeMonthlyFee,
-      due_date: dueDate.toISOString().split('T')[0],
-      status: 'pending',
-      created_at: new Date().toISOString()
-    })
-  })
-
-  // 6. Reconcile charges preserving paid, bolsa100, bolsa50, and isento
-  const { data: existing } = await supabase.from('financial_charges')
-    .select('*')
-    .eq('student_id', studentId)
-    .neq('type', 'expense')
-
-  const preservedStatuses = ['paid', 'bolsa100', 'bolsa50', 'isento']
-  // Disciplines renamed between grades (e.g. EAD grade vs presencial grade) that refer to the same course.
-  const DESCRIPTION_SYNONYMS: Record<string, string> = {
-    'evangelismo e missoes': 'evangelismo e missiologia',
-  }
-  const norm = (s: string) => {
-    const base = (s || '').toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '').trim()
-    return DESCRIPTION_SYNONYMS[base] || base
-  }
-
-  const finalCharges: any[] = []
-  const handledExistingIds = new Set<string>()
-  const toDeleteIds = new Set<string>()
-
-  for (const nc of charges) {
-    const matches = (existing || []).filter((ex: any) => {
-      if (handledExistingIds.has(ex.id)) return false
-      if (nc.type === 'enrollment' && ex.type === 'enrollment') return true
-      if (nc.type === 'monthly' && ex.type === 'monthly') {
-        if (ex.discipline_id && ex.discipline_id === nc.discipline_id) return true
-        if (norm(ex.description) === norm(nc.description)) return true
-      }
-      return false
-    })
-
-    if (matches.length > 0) {
-      const paidMatch = matches.find((m: any) => m.status === 'paid')
-      const bolsaMatch = matches.find((m: any) => m.status === 'bolsa100' || m.status === 'bolsa50' || m.status === 'isento')
-      const chosen = paidMatch || bolsaMatch || matches[0]
-
-      handledExistingIds.add(chosen.id)
-
-      if (preservedStatuses.includes(chosen.status)) {
-        // Keep existing paid/bolsa, update due_date and discipline_id so sorting aligns with grade
-        await supabase.from('financial_charges').update({
-          due_date: nc.due_date,
-          discipline_id: nc.discipline_id,
-          description: nc.description
-        }).eq('id', chosen.id)
-      } else {
-        // Update pending charge to canonical due_date, discipline_id and description
-        await supabase.from('financial_charges').update({
-          due_date: nc.due_date,
-          amount: nc.amount,
-          discipline_id: nc.discipline_id,
-          description: nc.description
-        }).eq('id', chosen.id)
-      }
-
-      // Mark the other duplicate matches to be deleted (if not paid)
-      matches.forEach((m: any) => {
-        if (m.id !== chosen.id && m.status !== 'paid') {
-          toDeleteIds.add(m.id)
-        }
-      })
-    } else {
-      finalCharges.push(nc)
-    }
-  }
-
-  // Delete leftover unhandled charges that are NOT preserved (duplicate EAD or rogue charges)
-  (existing || []).forEach((ex: any) => {
-    if (!handledExistingIds.has(ex.id) && ex.status !== 'paid') {
-      toDeleteIds.add(ex.id)
-    }
-  })
-
-  if (toDeleteIds.size > 0) {
-    const deleteIds = Array.from(toDeleteIds)
-    await supabase.from('financial_charges').delete().in('id', deleteIds)
-  }
-
-  // Insert any missing canonical charges
-  if (finalCharges.length > 0) {
-    const { error } = await supabase.from('financial_charges').insert(finalCharges)
-    if (error) throw new Error(error.message)
-  }
+  await apiRequest('/api/admin/sync', 'POST', { action: 'syncStudentTuition', studentId })
 }
 
 export async function settleFinancialCharge(id: string, data: {

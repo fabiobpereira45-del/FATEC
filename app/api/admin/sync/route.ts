@@ -1,48 +1,45 @@
 import { NextResponse } from "next/server"
-import { createAdminClient } from "@/lib/supabase/admin"
+import { requireUser } from "@/lib/api-auth"
+import {
+  copyGlobalGradeToClass, backfillClassCurriculumFromGlobalGrade, syncAllAttendanceScores,
+  syncStudentGrades, bulkSyncGrades, syncStudentTuitionByDisciplines, getAvailableSlots,
+} from "@/lib/repos/sync-tools"
 
-export async function GET() {
-  try {
-    const supabase = createAdminClient()
+// Ferramentas de manutenção em massa: restritas a master/secretaria.
+export async function POST(req: Request) {
+  const u = await requireUser(req, ["master", "secretary"])
+  if ("error" in u) return u.error
+  const body = await req.json().catch(() => null)
+  const action = body?.action
 
-    // 1. Fetch all professors from the public table
-    const { data: professors, error: fetchError } = await supabase
-      .from('professor_accounts')
-      .select('*')
-
-    if (fetchError) throw fetchError
-
-    const results = []
-
-    for (const prof of professors) {
-      // 2. Decode password from base64 (since password_hash stores base64 version)
-      const decodedPassword = Buffer.from(prof.password_hash, 'base64').toString('ascii')
-
-      // 3. Create user in Supabase Auth
-      const { data: userData, error: authError } = await supabase.auth.admin.createUser({
-        email: prof.email,
-        password: decodedPassword,
-        email_confirm: true,
-        user_metadata: {
-          full_name: prof.name,
-          role: prof.role || "professor"
-        }
-      })
-
-      if (authError) {
-        // If user already exists, we skip or update (here we skip with a message)
-        results.push({ email: prof.email, status: "error", message: authError.message })
-      } else {
-        results.push({ email: prof.email, status: "success", userId: userData.user.id })
-      }
-    }
-
-    return NextResponse.json({ 
-      summary: `Processados ${professors.length} professores.`,
-      results 
-    })
-
-  } catch (err: any) {
-    return NextResponse.json({ error: err.message }, { status: 500 })
+  switch (action) {
+    case "copyGlobalGradeToClass":
+      if (!body.classId) return NextResponse.json({ error: "classId é obrigatório." }, { status: 400 })
+      return NextResponse.json({ inserted: await copyGlobalGradeToClass(body.classId) })
+    case "backfillClassCurriculum":
+      return NextResponse.json({ results: await backfillClassCurriculumFromGlobalGrade() })
+    case "syncAllAttendanceScores":
+      await syncAllAttendanceScores()
+      return NextResponse.json({ success: true })
+    case "syncStudentGrades":
+      if (!body.studentId) return NextResponse.json({ error: "studentId é obrigatório." }, { status: 400 })
+      return NextResponse.json(await syncStudentGrades(body.studentId, body.cpf, body.email, body.enrollmentNumber))
+    case "bulkSyncGrades":
+      return NextResponse.json(await bulkSyncGrades())
+    case "syncStudentTuition":
+      if (!body.studentId) return NextResponse.json({ error: "studentId é obrigatório." }, { status: 400 })
+      await syncStudentTuitionByDisciplines(body.studentId)
+      return NextResponse.json({ success: true })
+    default:
+      return NextResponse.json({ error: "Ação desconhecida." }, { status: 400 })
   }
+}
+
+// Pública: a home exibe o número de vagas sem exigir login.
+export async function GET(req: Request) {
+  const { searchParams } = new URL(req.url)
+  if (searchParams.get("action") === "availableSlots") {
+    return NextResponse.json({ available: await getAvailableSlots() })
+  }
+  return NextResponse.json({ error: "Ação desconhecida." }, { status: 400 })
 }
