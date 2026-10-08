@@ -9,12 +9,8 @@ import { ProfessorLogin } from "@/components/professor-login"
 import { AdminDashboard } from "@/components/admin-dashboard"
 import { StudentDashboard } from "@/components/student-dashboard"
 import { EnrollmentForm } from "@/components/enrollment-form"
-import { GradeViewer } from "@/components/grade-viewer"
-import { InstitutionalManager } from "@/components/institutional-manager"
 import { PoloSelector } from "@/components/polo-selector"
 import { HighlightsCarousel, type HighlightSlide } from "@/components/landing/highlights-carousel"
-import { CurriculumHighlight } from "@/components/landing/curriculum-highlight"
-import { ProfessorsShowcase } from "@/components/landing/professors-showcase"
 import { TestimonialsSection } from "@/components/landing/testimonials-section"
 import { ScrollReveal } from "@/components/landing/scroll-reveal"
 import { usePolo } from "@/lib/polo-context"
@@ -27,8 +23,9 @@ import {
   type StudentSubmission,
   type FinancialSettings,
   getAvailableSlots,
+  POLOS,
 } from "@/lib/store"
-import { BookOpen, GraduationCap, ClipboardList, User, Users, MessageSquareQuote } from "lucide-react"
+import { BookOpen, GraduationCap, ClipboardList, User, MessageSquareQuote } from "lucide-react"
 
 type View = "polo-select" | "landing" | "public-exam-login" | "student-portal-login" | "student-assessment" | "student-result" | "professor-login" | "admin" | "student-dashboard"
 
@@ -40,7 +37,6 @@ export default function HomePage() {
   const [finSettings, setFinSettings] = useState<FinancialSettings | null>(null)
   const [mounted, setMounted] = useState(false)
   const [showEnroll, setShowEnroll] = useState(false)
-  const [showGrade, setShowGrade] = useState(false)
   const [availableSlots, setAvailableSlots] = useState<number | null>(null)
 
   useEffect(() => {
@@ -80,10 +76,16 @@ export default function HomePage() {
     getFinancialSettings().then(setFinSettings)
   }, [])
 
-  // Once polo context is loaded for the FIRST time, auto-skip selector if polo was already saved.
+  // Once polo context is loaded for the FIRST time, auto-skip selector if polo was already saved
+  // — ou se só existe um polo cadastrado (nesse caso não há escolha real a fazer).
   // We do NOT re-run this when view changes (user explicitly navigating to polo-select must be allowed).
   useEffect(() => {
     if (!isLoaded) return
+    if (POLOS.length === 1 && !polo) {
+      selectPolo(POLOS[0])
+      setView("landing")
+      return
+    }
     // Only auto-advance on initial load (when still on polo-select and no explicit user action)
     setView(prev => (prev === "polo-select" && polo) ? "landing" : prev)
   // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -232,11 +234,11 @@ export default function HomePage() {
 
               <div className="relative z-10 flex-shrink-0 group">
                 <div className="absolute inset-0 bg-accent/20 rounded-full blur-3xl opacity-0 group-hover:opacity-100 transition-opacity duration-700" />
-                <div className="relative z-10 w-64 h-64 md:w-80 md:h-80 rounded-full shadow-[0_20px_50px_rgba(0,0,0,0.5)] transition-transform duration-500 hover:scale-105 overflow-hidden">
+                <div className="relative z-10 w-32 h-32 md:w-40 md:h-40 rounded-full bg-black/30 border border-white/10 shadow-[0_20px_50px_rgba(0,0,0,0.5)] transition-transform duration-500 hover:scale-105 overflow-hidden flex items-center justify-center p-4">
                   <img
                     src="/FATEC.png"
                     alt="FATEC Logo"
-                    className="w-full h-full object-cover"
+                    className="w-full h-full object-contain"
                   />
                 </div>
               </div>
@@ -255,26 +257,6 @@ export default function HomePage() {
                     icon: ClipboardList,
                     gradient: "bg-gradient-to-br from-[#450a0a] to-[#991b1b]",
                     onClick: () => setShowEnroll(true),
-                  },
-                  {
-                    id: "grade",
-                    eyebrow: "Grade Curricular",
-                    title: "18 disciplinas, 3 semestres, formação completa",
-                    description: "Veja todas as matérias, cronograma e modalidades disponíveis antes de se matricular.",
-                    cta: "Ver Grade Curricular",
-                    icon: BookOpen,
-                    gradient: "bg-gradient-to-br from-[#1a0606] to-[#450a0a]",
-                    onClick: () => setShowGrade(true),
-                  },
-                  {
-                    id: "professores",
-                    eyebrow: "Corpo Docente",
-                    title: "Aprenda com quem vive a Palavra",
-                    description: "Conheça os professores que vão te acompanhar em cada etapa do curso.",
-                    cta: "Conhecer Professores",
-                    icon: Users,
-                    gradient: "bg-gradient-to-br from-[#7f1d1d] to-[#450a0a]",
-                    onClick: () => document.getElementById("professores")?.scrollIntoView({ behavior: "smooth" }),
                   },
                   {
                     id: "depoimentos",
@@ -299,10 +281,10 @@ export default function HomePage() {
               >
                 <div>
                   <div className="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full bg-amber-500/20 text-amber-300 text-xs font-bold uppercase tracking-wider mb-2 border border-amber-500/30">
-                    ✦ Matrículas Abertas • R$ 79,99/mês
+                    ✦ Matrículas Abertas
                   </div>
                   <h2 className="text-xl sm:text-2xl font-black mb-1 text-white">Apresentação do Curso de Teologia</h2>
-                  <p className="text-sm text-slate-300">Veja a grade completa com os 3 semestres, corpo docente e garanta sua vaga.</p>
+                  <p className="text-sm text-slate-300">Conheça o curso e garanta sua vaga.</p>
                 </div>
                 <div className="h-12 w-12 rounded-xl bg-amber-500/20 border border-amber-500/40 flex items-center justify-center text-amber-400 shrink-0 ml-4 group-hover:scale-110 transition-transform">
                   <BookOpen className="h-6 w-6" />
@@ -318,17 +300,6 @@ export default function HomePage() {
                 <ClipboardList className="h-8 w-8 mb-3 opacity-90" />
                 <h2 className="text-xl font-extrabold mb-1">Fazer Matrícula</h2>
                 <p className="text-sm opacity-80">Inscreva-se agora e comece sua formação teológica</p>
-              </button>
-
-              {/* Grade */}
-              <button
-                onClick={() => setShowGrade(true)}
-                className="group relative overflow-hidden bg-card border-2 border-border rounded-2xl p-6 text-left shadow-lg hover:shadow-xl hover:border-accent/40 hover:scale-[1.02] transition-all"
-              >
-                <div className="absolute inset-0 bg-accent/5 opacity-0 group-hover:opacity-100 transition-opacity" />
-                <BookOpen className="h-8 w-8 text-accent mb-3" />
-                <h2 className="text-xl font-extrabold mb-1 text-foreground">Ver Grade Curricular</h2>
-                <p className="text-sm text-muted-foreground">Conheça as disciplinas, turmas e turnos disponíveis</p>
               </button>
 
               {/* Área do Aluno */}
@@ -371,28 +342,9 @@ export default function HomePage() {
               )}
             </div>
 
-            {/* Grade Curricular em Destaque */}
-            <ScrollReveal>
-              <CurriculumHighlight onViewGrade={() => setShowGrade(true)} />
-            </ScrollReveal>
-
-            {/* Professores */}
-            <div id="professores" className="scroll-mt-24">
-              <ProfessorsShowcase />
-            </div>
-
             {/* Depoimentos */}
             <div id="depoimentos" className="scroll-mt-24">
               <TestimonialsSection />
-            </div>
-
-            {/* Inclusão Institucional */}
-            <div className="pt-8 border-t border-border mt-12">
-              <div className="mb-8">
-                <h2 className="text-3xl font-black text-foreground tracking-tight">Informações Institucionais</h2>
-                <p className="text-muted-foreground">Conheça nossa missão e diretoria</p>
-              </div>
-              <InstitutionalManager />
             </div>
           </div>
         )}
@@ -430,9 +382,6 @@ export default function HomePage() {
           onClose={() => setShowEnroll(false)}
           onSuccess={() => setView("student-portal-login")}
         />
-      )}
-      {showGrade && (
-        <GradeViewer onClose={() => setShowGrade(false)} />
       )}
     </div>
   )

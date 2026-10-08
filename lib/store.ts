@@ -176,25 +176,20 @@ export interface Polo {
   description?: string
 }
 
-/** Polos cadastrados no sistema */
+// Polos fixos (Salvador/Chapada, do IETEO) removidos. A FATEC ainda não tem
+// polos por bairro cadastrados — isso será configurado pelo master nas
+// configurações, não é mais uma lista fixa no código. Por enquanto, um único
+// polo genérico mantém o restante do sistema (matrícula, financeiro, turmas)
+// funcionando sem travar numa escolha de cidade que não existe.
 export const POLOS: Polo[] = [
   {
     id: "polo-tancredo-neves",
-    name: "Polo Salvador",
-    city: "Salvador - BA",
-    color: "#7f1d1d",
-    colorSecondary: "#991b1b",
+    name: "Unidade Principal",
+    city: "",
+    color: "#B8962E",
+    colorSecondary: "#8a6f1e",
     isActive: true,
-    description: "Sede principal da FATEC - Salvador",
-  },
-  {
-    id: "polo-chapada",
-    name: "Polo Chapada",
-    city: "Chapada Diamantina - BA",
-    color: "#1e3a5f",
-    colorSecondary: "#1e40af",
-    isActive: true,
-    description: "Polo regional da Chapada Diamantina",
+    description: "Polo padrão da FATEC",
   },
 ]
 
