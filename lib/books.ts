@@ -1,5 +1,5 @@
-import { createClient } from "@/lib/supabase/client"
 import { type StudentProfile } from "@/lib/store"
+import { apiRequest } from "@/lib/api-client"
 
 export interface Book {
   id: string
@@ -62,55 +62,6 @@ export const BOOK_CATEGORIES = [
   "Geral / Espiritualidade"
 ]
 
-// ─── Initial Seed / Mock Catalog ─────────────────────────────────────────────
-const INITIAL_BOOKS: Book[] = []
-
-// ─── LocalStorage Fallback Helpers ────────────────────────────────────────────
-const STORAGE_KEY_BOOKS = "fatec_library_books_v1"
-const STORAGE_KEY_LOANS = "fatec_library_loans_v1"
-
-function getLocalBooks(): Book[] {
-  if (typeof window === "undefined") return INITIAL_BOOKS
-  try {
-    const raw = localStorage.getItem(STORAGE_KEY_BOOKS)
-    if (!raw) {
-      localStorage.setItem(STORAGE_KEY_BOOKS, JSON.stringify(INITIAL_BOOKS))
-      return INITIAL_BOOKS
-    }
-    return JSON.parse(raw)
-  } catch {
-    return INITIAL_BOOKS
-  }
-}
-
-function saveLocalBooks(books: Book[]) {
-  if (typeof window === "undefined") return
-  try {
-    localStorage.setItem(STORAGE_KEY_BOOKS, JSON.stringify(books))
-  } catch (err) {
-    console.error("Failed to save local books:", err)
-  }
-}
-
-function getLocalLoans(): BookLoan[] {
-  if (typeof window === "undefined") return []
-  try {
-    const raw = localStorage.getItem(STORAGE_KEY_LOANS)
-    return raw ? JSON.parse(raw) : []
-  } catch {
-    return []
-  }
-}
-
-function saveLocalLoans(loans: BookLoan[]) {
-  if (typeof window === "undefined") return
-  try {
-    localStorage.setItem(STORAGE_KEY_LOANS, JSON.stringify(loans))
-  } catch (err) {
-    console.error("Failed to save local loans:", err)
-  }
-}
-
 // ─── Helper: Compute Loan Status & Overdue ─────────────────────────────────────
 export function evaluateLoanStatus(loan: BookLoan): {
   isOverdue: boolean
@@ -163,136 +114,22 @@ export async function getBooks(filter?: {
   search?: string
   category?: string
 }): Promise<Book[]> {
-  const supabase = createClient()
-  try {
-    let query = supabase.from("books").select("*").order("title", { ascending: true })
-    if (filter?.category && filter.category !== "all") {
-      query = query.eq("category", filter.category)
-    }
-    if (filter?.poloId && filter.poloId !== "all") {
-      query = query.or(`polo_id.eq.${filter.poloId},polo_id.is.null`)
-    }
-
-    const { data, error } = await query
-    if (!error && data && data.length > 0) {
-      let books: Book[] = data.map((b: any) => ({
-        id: b.id,
-        title: b.title,
-        subtitle: b.subtitle,
-        author: b.author,
-        publisher: b.publisher,
-        publicationYear: b.publication_year,
-        isbn: b.isbn,
-        category: b.category,
-        coverUrl: b.cover_url,
-        synopsis: b.synopsis,
-        totalCopies: b.total_copies ?? 1,
-        availableCopies: b.available_copies ?? 1,
-        locationShelf: b.location_shelf,
-        poloId: b.polo_id,
-        createdAt: b.created_at
-      }))
-
-      if (filter?.search) {
-        const s = filter.search.toLowerCase()
-        books = books.filter(b =>
-          b.title.toLowerCase().includes(s) ||
-          b.author.toLowerCase().includes(s) ||
-          b.publisher?.toLowerCase().includes(s) ||
-          b.category.toLowerCase().includes(s)
-        )
-      }
-      return books
-    }
-  } catch {
-    // Fallback to local
-  }
-
-  // Local fallback
-  let local = getLocalBooks()
-  if (filter?.category && filter.category !== "all") {
-    local = local.filter(b => b.category === filter.category)
-  }
-  if (filter?.poloId && filter.poloId !== "all") {
-    local = local.filter(b => !b.poloId || b.poloId === filter.poloId)
-  }
-  if (filter?.search) {
-    const s = filter.search.toLowerCase()
-    local = local.filter(b =>
-      b.title.toLowerCase().includes(s) ||
-      b.author.toLowerCase().includes(s) ||
-      b.publisher?.toLowerCase().includes(s) ||
-      b.category.toLowerCase().includes(s)
-    )
-  }
-  return local
+  const params = new URLSearchParams()
+  if (filter?.poloId) params.set("poloId", filter.poloId)
+  if (filter?.category) params.set("category", filter.category)
+  if (filter?.search) params.set("search", filter.search)
+  const qs = params.toString()
+  const r = await apiRequest<{ data: Book[] }>(`/api/books${qs ? `?${qs}` : ""}`)
+  return r.data
 }
 
 export async function saveBook(book: Partial<Book> & { title: string; author: string }): Promise<Book> {
-  const supabase = createClient()
-  const id = book.id || `book-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`
-  const newBook: Book = {
-    id,
-    title: book.title,
-    subtitle: book.subtitle || "",
-    author: book.author,
-    publisher: book.publisher || "",
-    publicationYear: book.publicationYear || new Date().getFullYear(),
-    isbn: book.isbn || "",
-    category: book.category || "Teologia Sistemática",
-    coverUrl: book.coverUrl || "",
-    synopsis: book.synopsis || "",
-    totalCopies: Number(book.totalCopies ?? 1),
-    availableCopies: Number(book.availableCopies ?? book.totalCopies ?? 1),
-    locationShelf: book.locationShelf || "Acervo Geral",
-    poloId: book.poloId || null,
-    createdAt: book.createdAt || new Date().toISOString()
-  }
-
-  try {
-    const dbPayload = {
-      id: newBook.id,
-      title: newBook.title,
-      subtitle: newBook.subtitle,
-      author: newBook.author,
-      publisher: newBook.publisher,
-      publication_year: newBook.publicationYear,
-      isbn: newBook.isbn,
-      category: newBook.category,
-      cover_url: newBook.coverUrl,
-      synopsis: newBook.synopsis,
-      total_copies: newBook.totalCopies,
-      available_copies: newBook.availableCopies,
-      location_shelf: newBook.locationShelf,
-      polo_id: newBook.poloId,
-      created_at: newBook.createdAt
-    }
-    const { error } = await supabase.from("books").upsert(dbPayload)
-    if (error) console.warn("Supabase saveBook warning:", error.message)
-  } catch {
-    // ignore, saved locally
-  }
-
-  const list = getLocalBooks()
-  const idx = list.findIndex(b => b.id === newBook.id)
-  if (idx >= 0) {
-    list[idx] = newBook
-  } else {
-    list.unshift(newBook)
-  }
-  saveLocalBooks(list)
-  return newBook
+  const r = await apiRequest<{ data: Book }>("/api/books", "POST", book)
+  return r.data
 }
 
 export async function deleteBook(id: string): Promise<void> {
-  const supabase = createClient()
-  try {
-    await supabase.from("books").delete().eq("id", id)
-  } catch {
-    // ignore
-  }
-  const list = getLocalBooks().filter(b => b.id !== id)
-  saveLocalBooks(list)
+  await apiRequest(`/api/books?id=${id}`, "DELETE")
 }
 
 // ─── Loan Methods ─────────────────────────────────────────────────────────────
@@ -302,65 +139,14 @@ export async function getBookLoans(filter?: {
   status?: string
   poloId?: string
 }): Promise<BookLoan[]> {
-  const supabase = createClient()
-  let loans: BookLoan[] = []
-
-  try {
-    let query = supabase.from("book_loans").select("*").order("requested_at", { ascending: false })
-    if (filter?.studentId) query = query.eq("student_id", filter.studentId)
-    if (filter?.status && filter.status !== "all") query = query.eq("status", filter.status)
-    if (filter?.poloId && filter.poloId !== "all") query = query.eq("polo_id", filter.poloId)
-
-    const { data, error } = await query
-    if (!error && data && data.length > 0) {
-      loans = data.map((l: any) => ({
-        id: l.id,
-        bookId: l.book_id,
-        bookTitle: l.book_title,
-        bookAuthor: l.book_author,
-        bookCoverUrl: l.book_cover_url,
-        studentId: l.student_id,
-        studentName: l.student_name,
-        studentEmail: l.student_email,
-        studentPhone: l.student_phone,
-        studentCpf: l.student_cpf,
-        poloId: l.polo_id,
-        requestedAt: l.requested_at,
-        borrowedAt: l.borrowed_at,
-        dueDate: l.due_date,
-        returnedAt: l.returned_at,
-        status: l.status,
-        notes: l.notes,
-        registeredBy: l.registered_by,
-        renewed: l.renewed,
-        cancelledAt: l.cancelled_at ?? null,
-        cancelledBy: l.cancelled_by ?? null,
-        cancelReason: l.cancel_reason ?? null
-      }))
-    } else {
-      loans = getLocalLoans()
-    }
-  } catch {
-    loans = getLocalLoans()
-  }
-
-  // Re-evaluate statuses (update to 'late' if dueDate < today and not returned)
-  loans = loans.map(l => {
-    const { status } = evaluateLoanStatus(l)
-    return { ...l, status }
-  })
-
-  if (filter?.studentId) {
-    loans = loans.filter(l => l.studentId === filter.studentId)
-  }
-  if (filter?.status && filter.status !== "all") {
-    loans = loans.filter(l => l.status === filter.status)
-  }
-  if (filter?.poloId && filter.poloId !== "all") {
-    loans = loans.filter(l => !l.poloId || l.poloId === filter.poloId)
-  }
-
-  return loans
+  const params = new URLSearchParams()
+  if (filter?.studentId) params.set("studentId", filter.studentId)
+  if (filter?.status) params.set("status", filter.status)
+  if (filter?.poloId) params.set("poloId", filter.poloId)
+  const qs = params.toString()
+  const r = await apiRequest<{ data: BookLoan[] }>(`/api/book-loans${qs ? `?${qs}` : ""}`)
+  // Reavalia o status (ex.: marca como "late" se o prazo já passou).
+  return r.data.map(l => ({ ...l, status: evaluateLoanStatus(l).status }))
 }
 
 export async function requestBookLoan(book: Book, student: {
@@ -371,279 +157,35 @@ export async function requestBookLoan(book: Book, student: {
   cpf?: string
   poloId?: string | null
 }): Promise<BookLoan> {
-  if (book.availableCopies <= 0) {
-    throw new Error("Não há exemplares deste livro disponíveis para empréstimo no momento.")
-  }
-
-  // Check if they are trying to borrow the exact same book they just returned
-  await checkBorrowEligibility(student.id, book.id)
-
-  const id = `loan-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`
-  const newLoan: BookLoan = {
-    id,
-    bookId: book.id,
-    bookTitle: book.title,
-    bookAuthor: book.author,
-    bookCoverUrl: book.coverUrl,
-    studentId: student.id,
-    studentName: student.name,
-    studentEmail: student.email,
-    studentPhone: student.phone,
-    studentCpf: student.cpf,
-    poloId: student.poloId || book.poloId || null,
-    requestedAt: new Date().toISOString(),
-    status: "reserved",
-    renewed: false
-  }
-
-  const supabase = createClient()
-  try {
-    await supabase.from("book_loans").insert({
-      id: newLoan.id,
-      book_id: newLoan.bookId,
-      book_title: newLoan.bookTitle,
-      book_author: newLoan.bookAuthor,
-      book_cover_url: newLoan.bookCoverUrl,
-      student_id: newLoan.studentId,
-      student_name: newLoan.studentName,
-      student_email: newLoan.studentEmail,
-      student_phone: newLoan.studentPhone,
-      student_cpf: newLoan.studentCpf,
-      polo_id: newLoan.poloId,
-      requested_at: newLoan.requestedAt,
-      status: newLoan.status,
-      renewed: newLoan.renewed
-    })
-  } catch {
-    // local fallback
-  }
-
-  const loans = getLocalLoans()
-  loans.unshift(newLoan)
-  saveLocalLoans(loans)
-
-  return newLoan
+  const r = await apiRequest<{ data: BookLoan }>("/api/book-loans", "POST", {
+    bookId: book.id, studentId: student.id, studentName: student.name, studentEmail: student.email,
+    studentPhone: student.phone, studentCpf: student.cpf, poloId: student.poloId || book.poloId,
+  })
+  return r.data
 }
 
 export async function confirmPhysicalBorrow(loanId: string, registeredBy?: string): Promise<BookLoan> {
-  const now = new Date()
-  const due = new Date(now.getTime() + 7 * 24 * 60 * 60 * 1000) // 7 dias corridos
-
-  let updated: BookLoan | null = null
-  const localLoans = getLocalLoans()
-  const loan = localLoans.find(l => l.id === loanId)
-
-  if (loan) {
-    loan.borrowedAt = now.toISOString()
-    loan.dueDate = due.toISOString()
-    loan.status = "active"
-    loan.registeredBy = registeredBy || "Docente / Master"
-    updated = { ...loan }
-    saveLocalLoans(localLoans)
-
-    // Abate 1 cópia disponível do livro
-    const books = getLocalBooks()
-    const b = books.find(item => item.id === loan.bookId)
-    if (b && b.availableCopies > 0) {
-      b.availableCopies -= 1
-      saveLocalBooks(books)
-      try {
-        const supabase = createClient()
-        await supabase.from("books").update({ available_copies: b.availableCopies }).eq("id", b.id)
-      } catch {
-        // ignore
-      }
-    }
-  }
-
-  try {
-    const supabase = createClient()
-    await supabase.from("book_loans").update({
-      borrowed_at: now.toISOString(),
-      due_date: due.toISOString(),
-      status: "active",
-      registered_by: registeredBy || "Docente / Master"
-    }).eq("id", loanId)
-  } catch {
-    // ignore
-  }
-
-  if (!updated) {
-    throw new Error("Empréstimo não encontrado.")
-  }
-
-  return updated
+  const r = await apiRequest<{ data: BookLoan }>(`/api/book-loans/${loanId}`, "PATCH", { action: "confirmBorrow", registeredBy })
+  return r.data
 }
 
 export async function returnBookLoan(loanId: string): Promise<BookLoan> {
-  const now = new Date()
-  let updated: BookLoan | null = null
-  const localLoans = getLocalLoans()
-  const loan = localLoans.find(l => l.id === loanId)
-
-  if (loan) {
-    loan.returnedAt = now.toISOString()
-    loan.status = "returned"
-    updated = { ...loan }
-    saveLocalLoans(localLoans)
-
-    // Devolve 1 cópia para o estoque
-    const books = getLocalBooks()
-    const b = books.find(item => item.id === loan.bookId)
-    if (b && b.availableCopies < b.totalCopies) {
-      b.availableCopies += 1
-      saveLocalBooks(books)
-      try {
-        const supabase = createClient()
-        await supabase.from("books").update({ available_copies: b.availableCopies }).eq("id", b.id)
-      } catch {
-        // ignore
-      }
-    }
-  }
-
-  try {
-    const supabase = createClient()
-    await supabase.from("book_loans").update({
-      returned_at: now.toISOString(),
-      status: "returned"
-    }).eq("id", loanId)
-  } catch {
-    // ignore
-  }
-
-  if (!updated) {
-    throw new Error("Empréstimo não encontrado.")
-  }
-
-  return updated
+  const r = await apiRequest<{ data: BookLoan }>(`/api/book-loans/${loanId}`, "PATCH", { action: "return" })
+  return r.data
 }
 
 export async function cancelBookLoan(loanId: string): Promise<void> {
-  // Soft-cancel: preserva histórico para o filtro "Cancelados"
-  const now = new Date().toISOString()
-  const localLoans = getLocalLoans()
-  const loan = localLoans.find(l => l.id === loanId)
-  if (loan) {
-    loan.status = "cancelled"
-    loan.cancelledAt = now
-    loan.cancelledBy = "admin"
-    saveLocalLoans(localLoans)
-  } else {
-    saveLocalLoans(localLoans.filter(l => l.id !== loanId))
-  }
-
-  try {
-    const supabase = createClient()
-    const { error } = await supabase.from("book_loans").update({
-      status: "cancelled",
-      cancelled_at: now,
-      cancelled_by: "admin"
-    }).eq("id", loanId)
-    // Fallback para bancos antigos sem as colunas de cancelamento: tenta só status
-    if (error && /cancelled/i.test(error.message)) {
-      await supabase.from("book_loans").update({ status: "cancelled" }).eq("id", loanId)
-    }
-  } catch {
-    // ignore
-  }
+  await apiRequest(`/api/book-loans/${loanId}`, "PATCH", { action: "cancel" })
 }
 
 export async function cancelMyReservation(loanId: string, studentId: string): Promise<BookLoan> {
-  const localLoans = getLocalLoans()
-  const loan = localLoans.find(l => l.id === loanId)
-
-  if (!loan) {
-    throw new Error("Reserva não encontrada.")
-  }
-
-  if (loan.studentId !== studentId) {
-    throw new Error("Você só pode cancelar suas próprias reservas.")
-  }
-
-  if (loan.status !== "reserved") {
-    throw new Error("Esta reserva já foi processada e não pode mais ser cancelada pelo aluno.")
-  }
-
-  const now = new Date().toISOString()
-  loan.status = "cancelled"
-  loan.cancelledAt = now
-  loan.cancelledBy = "student"
-  saveLocalLoans(localLoans)
-
-  try {
-    const supabase = createClient()
-    const { error } = await supabase.from("book_loans").update({
-      status: "cancelled",
-      cancelled_at: now,
-      cancelled_by: "student"
-    }).eq("id", loanId)
-    if (error && /cancelled/i.test(error.message)) {
-      await supabase.from("book_loans").update({ status: "cancelled" }).eq("id", loanId)
-    }
-  } catch {
-    // ignore — local já foi atualizado
-  }
-
-  return { ...loan }
+  const r = await apiRequest<{ data: BookLoan }>(`/api/book-loans/${loanId}`, "PATCH", { action: "cancelMine", studentId })
+  return r.data
 }
 
 export async function renewBookLoan(loanId: string): Promise<BookLoan> {
-  const localLoans = getLocalLoans()
-  const loan = localLoans.find(l => l.id === loanId)
-
-  if (!loan) {
-    throw new Error("Empréstimo não encontrado.")
-  }
-
-  if (loan.renewed) {
-    throw new Error("Este empréstimo já foi renovado anteriormente. Só é permitida uma renovação por locação.")
-  }
-
-  if (!loan.dueDate) {
-    throw new Error("Não é possível renovar um empréstimo sem data de vencimento estabelecida.")
-  }
-
-  const currentDueDate = new Date(loan.dueDate)
-  // Adiciona 5 dias (5 * 24 horas * 60 min * 60 seg * 1000 ms)
-  const newDueDate = new Date(currentDueDate.getTime() + 5 * 24 * 60 * 60 * 1000)
-
-  loan.dueDate = newDueDate.toISOString()
-  loan.renewed = true
-  // Re-avalia o status localmente para garantir consistência visual imediata
-  const { status } = evaluateLoanStatus(loan)
-  loan.status = status
-
-  saveLocalLoans(localLoans)
-
-  try {
-    const supabase = createClient()
-    await supabase.from("book_loans").update({
-      due_date: loan.dueDate,
-      renewed: true
-    }).eq("id", loanId)
-  } catch {
-    // ignore
-  }
-
-  return { ...loan }
-}
-
-async function checkBorrowEligibility(studentId: string, bookId: string): Promise<void> {
-  // Regra: "o aluno não poderá locar o mesmo material na proxima vez, antes deverá locar outro material para depois retornar ao anterior"
-  // Obtém o histórico do aluno (já vem de local + supabase em caso de query real, mas podemos usar getBookLoans)
-  const loans = await getBookLoans({ studentId })
-  
-  // Pegar apenas os livros devolvidos, ordenados do mais recente para o mais antigo (getBookLoans já ordena decrescente, mas vamos garantir usando returnedAt se existir)
-  const returnedLoans = loans.filter(l => l.status === "returned" && l.returnedAt)
-  returnedLoans.sort((a, b) => new Date(b.returnedAt!).getTime() - new Date(a.returnedAt!).getTime())
-
-  if (returnedLoans.length > 0) {
-    const lastReturned = returnedLoans[0]
-    if (lastReturned.bookId === bookId) {
-      throw new Error("Você deve locar um material diferente antes de poder pegar este mesmo livro novamente.")
-    }
-  }
+  const r = await apiRequest<{ data: BookLoan }>(`/api/book-loans/${loanId}`, "PATCH", { action: "renew" })
+  return r.data
 }
 
 // ─── Direct Admin Borrow (without student reservation) ────────────────────────
@@ -652,79 +194,12 @@ export async function directAdminBorrow(data: {
   student: StudentProfile
   registeredBy?: string
 }): Promise<BookLoan> {
-  if (data.book.availableCopies <= 0) {
-    throw new Error("Livro sem exemplares disponíveis no momento.")
-  }
-
-  const now = new Date()
-  const due = new Date(now.getTime() + 7 * 24 * 60 * 60 * 1000)
-  const id = `loan-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`
-
-  const newLoan: BookLoan = {
-    id,
-    bookId: data.book.id,
-    bookTitle: data.book.title,
-    bookAuthor: data.book.author,
-    bookCoverUrl: data.book.coverUrl,
-    studentId: data.student.id,
-    studentName: data.student.name,
-    studentEmail: data.student.email,
-    studentPhone: data.student.phone,
-    studentCpf: data.student.cpf,
-    poloId: data.student.polo_id || data.book.poloId || null,
-    requestedAt: now.toISOString(),
-    borrowedAt: now.toISOString(),
-    dueDate: due.toISOString(),
-    status: "active",
-    registeredBy: data.registeredBy || "Administrador / Docente",
-    renewed: false
-  }
-
-  // Check eligibility
-  await checkBorrowEligibility(data.student.id, data.book.id)
-
-  // Salvar no local
-  const loans = getLocalLoans()
-  loans.unshift(newLoan)
-  saveLocalLoans(loans)
-
-  // Abater estoque
-  const books = getLocalBooks()
-  const b = books.find(item => item.id === data.book.id)
-  if (b && b.availableCopies > 0) {
-    b.availableCopies -= 1
-    saveLocalBooks(books)
-  }
-
-  try {
-    const supabase = createClient()
-    await supabase.from("book_loans").insert({
-      id: newLoan.id,
-      book_id: newLoan.bookId,
-      book_title: newLoan.bookTitle,
-      book_author: newLoan.bookAuthor,
-      book_cover_url: newLoan.bookCoverUrl,
-      student_id: newLoan.studentId,
-      student_name: newLoan.studentName,
-      student_email: newLoan.studentEmail,
-      student_phone: newLoan.studentPhone,
-      student_cpf: newLoan.studentCpf,
-      polo_id: newLoan.poloId,
-      requested_at: newLoan.requestedAt,
-      borrowed_at: newLoan.borrowedAt,
-      due_date: newLoan.dueDate,
-      status: "active",
-      registered_by: newLoan.registeredBy,
-      renewed: newLoan.renewed
-    })
-    if (b) {
-      await supabase.from("books").update({ available_copies: b.availableCopies }).eq("id", b.id)
-    }
-  } catch {
-    // ignore
-  }
-
-  return newLoan
+  const r = await apiRequest<{ data: BookLoan }>("/api/book-loans", "POST", {
+    bookId: data.book.id, studentId: data.student.id, studentName: data.student.name,
+    studentEmail: data.student.email, studentPhone: data.student.phone, studentCpf: data.student.cpf,
+    poloId: data.student.polo_id || data.book.poloId, direct: true, registeredBy: data.registeredBy,
+  })
+  return r.data
 }
 
 // ─── WhatsApp Alert Message Generator ─────────────────────────────────────────

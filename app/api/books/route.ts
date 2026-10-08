@@ -1,53 +1,37 @@
 import { NextResponse } from "next/server"
-import { createAdminClient } from "@/lib/supabase/admin"
+import { requireUser } from "@/lib/api-auth"
+import { listBooks, saveBook, deleteBook } from "@/lib/repos/library"
 
-export async function GET(request: Request) {
-  try {
-    const { searchParams } = new URL(request.url)
-    const category = searchParams.get("category")
-    const poloId = searchParams.get("poloId")
-
-    const supabase = createAdminClient()
-    let query = supabase.from("books").select("*").order("title", { ascending: true })
-
-    if (category && category !== "all") {
-      query = query.eq("category", category)
-    }
-    if (poloId && poloId !== "all") {
-      query = query.or(`polo_id.eq.${poloId},polo_id.is.null`)
-    }
-
-    const { data, error } = await query
-    if (error) throw error
-    return NextResponse.json({ success: true, data: data || [] })
-  } catch (err: any) {
-    return NextResponse.json({ error: err.message }, { status: 500 })
-  }
+// Leitura exige login (aluno ou staff), igual ao restante do portal.
+export async function GET(req: Request) {
+  const u = await requireUser(req)
+  if ("error" in u) return u.error
+  const { searchParams } = new URL(req.url)
+  const data = await listBooks({
+    category: searchParams.get("category") || undefined,
+    poloId: searchParams.get("poloId") || undefined,
+    search: searchParams.get("search") || undefined,
+  })
+  return NextResponse.json({ success: true, data })
 }
 
-export async function POST(request: Request) {
-  try {
-    const book = await request.json()
-    const supabase = createAdminClient()
-    const { data, error } = await supabase.from("books").upsert(book).select().single()
-    if (error) throw error
-    return NextResponse.json({ success: true, data })
-  } catch (err: any) {
-    return NextResponse.json({ error: err.message }, { status: 500 })
+export async function POST(req: Request) {
+  const u = await requireUser(req, ["master", "secretary"])
+  if ("error" in u) return u.error
+  const book = await req.json().catch(() => null)
+  if (!book?.title || !book?.author) {
+    return NextResponse.json({ error: "Título e autor são obrigatórios." }, { status: 400 })
   }
+  const data = await saveBook(book)
+  return NextResponse.json({ success: true, data })
 }
 
-export async function DELETE(request: Request) {
-  try {
-    const { searchParams } = new URL(request.url)
-    const id = searchParams.get("id")
-    if (!id) return NextResponse.json({ error: "ID é obrigatório" }, { status: 400 })
-
-    const supabase = createAdminClient()
-    const { error } = await supabase.from("books").delete().eq("id", id)
-    if (error) throw error
-    return NextResponse.json({ success: true })
-  } catch (err: any) {
-    return NextResponse.json({ error: err.message }, { status: 500 })
-  }
+export async function DELETE(req: Request) {
+  const u = await requireUser(req, ["master", "secretary"])
+  if ("error" in u) return u.error
+  const { searchParams } = new URL(req.url)
+  const id = searchParams.get("id")
+  if (!id) return NextResponse.json({ error: "ID é obrigatório" }, { status: 400 })
+  await deleteBook(id)
+  return NextResponse.json({ success: true })
 }

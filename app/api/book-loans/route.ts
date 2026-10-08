@@ -1,50 +1,55 @@
 import { NextResponse } from "next/server"
-import { createAdminClient } from "@/lib/supabase/admin"
+import { requireUser, isOwnStudent } from "@/lib/api-auth"
+import { listBookLoans, requestBookLoan, directAdminBorrow, getBook } from "@/lib/repos/library"
 
-export async function GET(request: Request) {
-  try {
-    const { searchParams } = new URL(request.url)
-    const studentId = searchParams.get("studentId")
-    const status = searchParams.get("status")
-    const poloId = searchParams.get("poloId")
-
-    const supabase = createAdminClient()
-    let query = supabase.from("book_loans").select("*").order("requested_at", { ascending: false })
-
-    if (studentId) query = query.eq("student_id", studentId)
-    if (status && status !== "all") query = query.eq("status", status)
-    if (poloId && poloId !== "all") query = query.eq("polo_id", poloId)
-
-    const { data, error } = await query
-    if (error) throw error
-    return NextResponse.json({ success: true, data: data || [] })
-  } catch (err: any) {
-    return NextResponse.json({ error: err.message }, { status: 500 })
+export async function GET(req: Request) {
+  const u = await requireUser(req)
+  if ("error" in u) return u.error
+  const { searchParams } = new URL(req.url)
+  const studentId = searchParams.get("studentId") || undefined
+  if (u.role === "student") {
+    if (!studentId || !(await isOwnStudent(u.user.id, studentId))) {
+      return NextResponse.json({ error: "Acesso negado." }, { status: 403 })
+    }
   }
+  const data = await listBookLoans({
+    studentId,
+    status: searchParams.get("status") || undefined,
+    poloId: searchParams.get("poloId") || undefined,
+  })
+  return NextResponse.json({ success: true, data })
 }
 
-export async function POST(request: Request) {
-  try {
-    const payload = await request.json()
-    const supabase = createAdminClient()
-    const { data, error } = await supabase.from("book_loans").insert(payload).select().single()
-    if (error) throw error
-    return NextResponse.json({ success: true, data })
-  } catch (err: any) {
-    return NextResponse.json({ error: err.message }, { status: 500 })
+// O próprio aluno reserva o livro; staff pode registrar empréstimo direto (sem reserva prévia).
+export async function POST(req: Request) {
+  const u = await requireUser(req)
+  if ("error" in u) return u.error
+  const body = await req.json().catch(() => null)
+  if (!body?.bookId || !body?.studentId) {
+    return NextResponse.json({ error: "Livro e aluno são obrigatórios." }, { status: 400 })
   }
-}
+  if (u.role === "student" && !(await isOwnStudent(u.user.id, body.studentId))) {
+    return NextResponse.json({ error: "Acesso negado." }, { status: 403 })
+  }
+  const book = await getBook(body.bookId)
+  if (!book) return NextResponse.json({ error: "Livro não encontrado." }, { status: 404 })
 
-export async function PATCH(request: Request) {
+  const student = {
+    id: body.studentId, name: body.studentName, email: body.studentEmail,
+    phone: body.studentPhone, cpf: body.studentCpf, poloId: body.poloId,
+  }
+
   try {
-    const { id, ...updates } = await request.json()
-    if (!id) return NextResponse.json({ error: "ID é obrigatório" }, { status: 400 })
-
-    const supabase = createAdminClient()
-    const { data, error } = await supabase.from("book_loans").update(updates).eq("id", id).select().single()
-    if (error) throw error
-    return NextResponse.json({ success: true, data })
+    if (body.direct) {
+      if (!["master", "secretary", "professor"].includes(u.role)) {
+        return NextResponse.json({ error: "Acesso negado." }, { status: 403 })
+      }
+      const data = await directAdminBorrow({ book, student, registeredBy: body.registeredBy })
+      return NextResponse.json({ success: true, data }, { status: 201 })
+    }
+    const data = await requestBookLoan(book, student)
+    return NextResponse.json({ success: true, data }, { status: 201 })
   } catch (err: any) {
-    return NextResponse.json({ error: err.message }, { status: 500 })
+    return NextResponse.json({ error: err.message }, { status: 400 })
   }
 }
