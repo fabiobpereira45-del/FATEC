@@ -176,22 +176,6 @@ export function ProfessorManager({ isMaster }: { isMaster?: boolean }) {
 
     try {
       setAdding(false)
-      const res = await fetch("/api/admin/users", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          email: data.email,
-          password: data.password,
-          name: data.name,
-          role: data.role
-        })
-      })
-
-      if (!res.ok) {
-        const err = await res.json()
-        alert("Erro ao criar professor no Supabase: " + (err.error || "Desconhecido"))
-      }
-
       await addProfessorAccount({
         name: data.name,
         email: data.email,
@@ -223,11 +207,7 @@ export function ProfessorManager({ isMaster }: { isMaster?: boolean }) {
 
   async function handleDelete() {
     if (!deleteId) return
-    const acc = accounts.find(a => a.id === deleteId)
     try {
-      if (acc && acc.email !== MASTER_CREDENTIALS.email) {
-        await fetch(`/api/admin/users?email=${encodeURIComponent(acc.email)}`, { method: "DELETE" })
-      }
       await deleteProfessorAccount(deleteId)
       setDeleteId(null)
       await refresh()

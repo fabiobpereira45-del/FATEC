@@ -75,7 +75,7 @@ export function StudentManager({ isMaster, poloFilter }: { isMaster?: boolean; p
     // ── Add form ──────────────────────────────────────────────────────────────
     const [name, setName] = useState("")
     const [email, setEmail] = useState("")
-    const [password, setPassword] = useState("123456")
+    const [password, setPassword] = useState("")
     const [showPassword, setShowPassword] = useState(false)
     const [cpf, setCpf] = useState("")
     const [phone, setPhone] = useState("")
@@ -183,13 +183,14 @@ export function StudentManager({ isMaster, poloFilter }: { isMaster?: boolean; p
     // ─── Create ───────────────────────────────────────────────────────────────
 
     function resetAddForm() {
-        setName(""); setEmail(""); setPassword("123456"); setCpf(""); setPhone("")
+        setName(""); setEmail(""); setPassword(""); setCpf(""); setPhone("")
         setAddress(""); setChurch(""); setPastor(""); setClassId("none")
     }
 
     async function handleAdd() {
         if (!name.trim()) return alert("Nome é obrigatório.")
-        if (!email.trim() || !password.trim()) return alert("Email e senha são obrigatórios.")
+        if (!email.trim()) return alert("Email é obrigatório.")
+        if (password.trim() && password.trim().length < 8) return alert("A senha deve ter ao menos 8 caracteres.")
         setSaving(true)
         try {
             await registerStudentByAdmin({
@@ -271,9 +272,7 @@ export function StudentManager({ isMaster, poloFilter }: { isMaster?: boolean; p
         if (!selected) return
         setDeleting(true)
         try {
-            if (selected.auth_user_id) {
-                await fetch(`/api/admin/users?id=${encodeURIComponent(selected.auth_user_id)}`, { method: "DELETE" })
-            }
+            // deleteStudent já remove a conta de login vinculada (se houver).
             await deleteStudent(selected.id)
             setIsDeleteOpen(false)
             setSelected(null)
@@ -378,7 +377,8 @@ export function StudentManager({ isMaster, poloFilter }: { isMaster?: boolean; p
                 await registerStudentByAdmin({
                     name: bulkName?.trim() || "",
                     email: bulkEmail?.trim() || "",
-                    password: "123456", // Default password
+                    // Sem senha: a conta nasce na ativação, com senha aleatória
+                    // (evita que vários alunos importados compartilhem a mesma senha).
                     cpf: bulkCpf?.trim() || "",
                     phone: bulkPhone?.trim() || "",
                     class_id: bulkClassId?.trim() === "none" ? undefined : bulkClassId?.trim(),
@@ -664,7 +664,7 @@ export function StudentManager({ isMaster, poloFilter }: { isMaster?: boolean; p
                             <div className="flex flex-col gap-1.5">
                                 <Label className="text-xs">Senha Inicial *</Label>
                                 <div className="relative">
-                                    <Input type={showPassword ? "text" : "password"} placeholder="Mín. 6 caracteres" className="pr-8 text-sm h-9" value={password} onChange={e => setPassword(e.target.value)} />
+                                    <Input type={showPassword ? "text" : "password"} placeholder="Opcional — mín. 8 caracteres" className="pr-8 text-sm h-9" value={password} onChange={e => setPassword(e.target.value)} />
                                     <button type="button" onClick={() => setShowPassword(p => !p)} className="absolute right-2.5 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground">
                                         {showPassword ? <EyeOff className="h-3.5 w-3.5" /> : <Eye className="h-3.5 w-3.5" />}
                                     </button>

@@ -102,5 +102,9 @@ export async function updateStudent(id: string, data: StudentUpdateInput) {
 }
 
 export async function deleteStudent(id: string) {
+  const { rows } = await pool.query("select auth_user_id from students where id = $1::uuid", [id])
   await pool.query("delete from students where id = $1::uuid", [id])
+  if (rows[0]?.auth_user_id) {
+    await pool.query('delete from "user" where id = $1', [rows[0].auth_user_id])
+  }
 }
