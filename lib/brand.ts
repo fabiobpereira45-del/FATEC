@@ -6,7 +6,7 @@ export const BRAND = {
   shortName: "FATEC",
   slogan: "Desde 2005",
   logo: "/FATEC.png",
-  siteUrl: "https://fatec.vercel.app",
+  siteUrl: "https://fatec-rho.vercel.app",
   // Domínio fictício usado para contas de aluno criadas a partir do CPF
   emailDomain: "student.fatec.com.br",
   // Prefixo das chaves do localStorage, para não colidir com outras instalações
