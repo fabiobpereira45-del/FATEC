@@ -1,5 +1,5 @@
 import { NextResponse } from "next/server"
-import { requireUser } from "@/lib/api-auth"
+import { requireUser, isOwnStudent } from "@/lib/api-auth"
 import { listFinancialCharges, createFinancialCharge } from "@/lib/repos/finance"
 
 export async function GET(req: Request) {
@@ -8,10 +8,7 @@ export async function GET(req: Request) {
   const { searchParams } = new URL(req.url)
   const studentId = searchParams.get("studentId") || undefined
   // Um aluno só pode ver as próprias cobranças.
-  if (u.role === "student" && studentId !== u.user.id) {
-    return NextResponse.json({ error: "Acesso negado." }, { status: 403 })
-  }
-  if (u.role === "student" && !studentId) {
+  if (u.role === "student" && (!studentId || !(await isOwnStudent(u.user.id, studentId)))) {
     return NextResponse.json({ error: "Acesso negado." }, { status: 403 })
   }
   return NextResponse.json(await listFinancialCharges(studentId))

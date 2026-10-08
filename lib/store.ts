@@ -2253,89 +2253,7 @@ export async function recordLiveSessionJoin(
   lessonDate?: string,
   minMinutes: number = 0
 ): Promise<{ trackingId: string; isValidated: boolean; totalSeconds: number }> {
-  const now = new Date().toISOString()
-  const targetDate = lessonDate || now.substring(0, 10)
-  const isInstant = minMinutes <= 0
-
-  // 1. Try Supabase tracking or Local fallback
-  const supabase = createClient()
-  let trackingId = `trk_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`
-  let currentSeconds = 0
-  let validated = isInstant
-
-  try {
-    // Check if table ead_live_tracking exists in supabase
-    const { data: existing } = await supabase
-      .from('ead_live_tracking')
-      .select('*')
-      .eq('lesson_id', lessonId)
-      .eq('student_id', studentId)
-      .maybeSingle()
-
-    if (existing) {
-      trackingId = existing.id
-      currentSeconds = existing.total_seconds || 0
-      validated = existing.is_validated || isInstant
-      await supabase.from('ead_live_tracking').update({
-        last_ping_at: now,
-        status: 'online',
-        is_validated: validated
-      }).eq('id', trackingId)
-    } else {
-      await supabase.from('ead_live_tracking').insert({
-        id: trackingId,
-        lesson_id: lessonId,
-        student_id: studentId,
-        student_name: studentName,
-        discipline_id: disciplineId,
-        date: targetDate,
-        joined_at: now,
-        last_ping_at: now,
-        total_seconds: 0,
-        is_validated: validated,
-        status: 'online'
-      })
-    }
-  } catch (err) {
-    // Fallback to local storage
-    const all = getLocalLiveTracking()
-    let found = all.find(t => t.lessonId === lessonId && t.studentId === studentId)
-    if (found) {
-      trackingId = found.id
-      found.lastPingAt = now
-      found.status = 'online'
-      if (isInstant) found.isValidated = true
-      currentSeconds = found.totalSeconds
-      validated = found.isValidated
-    } else {
-      const newItem: EadLiveTracking = {
-        id: trackingId,
-        lessonId,
-        studentId,
-        studentName,
-        disciplineId,
-        date: targetDate,
-        joinedAt: now,
-        lastPingAt: now,
-        totalSeconds: 0,
-        isValidated: validated,
-        status: 'online'
-      }
-      all.push(newItem)
-      saveLocalLiveTracking(all)
-    }
-  }
-
-  // 2. If validated immediately (0 min requirement), save attendance right away!
-  if (validated && studentId && disciplineId) {
-    try {
-      await saveAttendance(studentId, disciplineId, targetDate, true)
-    } catch (attErr) {
-      console.warn('Auto-attendance on join warning:', attErr)
-    }
-  }
-
-  return { trackingId, isValidated: validated, totalSeconds: currentSeconds }
+  return apiRequest('/api/ead/live/join', 'POST', { lessonId, studentId, studentName, disciplineId, lessonDate, minMinutes })
 }
 
 export async function pingLiveSessionHeartbeat(
@@ -2346,92 +2264,11 @@ export async function pingLiveSessionHeartbeat(
   date: string,
   minMinutes: number = 0
 ): Promise<{ totalSeconds: number; isValidated: boolean }> {
-  const now = new Date().toISOString()
-  let totalSec = secondsToAdd
-  let isValidated = false
-  const targetDate = date || now.substring(0, 10)
-
-  const supabase = createClient()
-  try {
-    const { data: current } = await supabase
-      .from('ead_live_tracking')
-      .select('*')
-      .eq('id', trackingId)
-      .maybeSingle()
-
-    if (current) {
-      totalSec = (current.total_seconds || 0) + secondsToAdd
-      isValidated = current.is_validated || (totalSec >= minMinutes * 60)
-      await supabase.from('ead_live_tracking').update({
-        total_seconds: totalSec,
-        last_ping_at: now,
-        status: 'online',
-        is_validated: isValidated
-      }).eq('id', trackingId)
-    }
-  } catch {
-    // Local fallback
-    const all = getLocalLiveTracking()
-    const found = all.find(t => t.id === trackingId)
-    if (found) {
-      found.totalSeconds += secondsToAdd
-      found.lastPingAt = now
-      found.status = 'online'
-      if (!found.isValidated && (found.totalSeconds >= minMinutes * 60)) {
-        found.isValidated = true
-      }
-      totalSec = found.totalSeconds
-      isValidated = found.isValidated
-      saveLocalLiveTracking(all)
-    }
-  }
-
-  // If newly validated, sync to official attendances
-  if (isValidated && studentId && disciplineId) {
-    try {
-      await saveAttendance(studentId, disciplineId, targetDate, true)
-    } catch (attErr) {
-      console.warn('Heartbeat auto-attendance sync warning:', attErr)
-    }
-  }
-
-  return { totalSeconds: totalSec, isValidated }
+  return apiRequest('/api/ead/live/ping', 'POST', { trackingId, secondsToAdd, studentId, disciplineId, date, minMinutes })
 }
 
 export async function getLiveLessonTracking(lessonId: string): Promise<EadLiveTracking[]> {
-  const supabase = createClient()
-  try {
-    const { data, error } = await supabase
-      .from('ead_live_tracking')
-      .select('*')
-      .eq('lesson_id', lessonId)
-      .order('joined_at', { ascending: false })
-    
-    if (!error && data && data.length > 0) {
-      return data.map((r: any) => ({
-        id: r.id,
-        lessonId: r.lesson_id,
-        studentId: r.student_id,
-        studentName: r.student_name || 'Aluno',
-        disciplineId: r.discipline_id,
-        date: r.date,
-        joinedAt: r.joined_at,
-        lastPingAt: r.last_ping_at,
-        totalSeconds: r.total_seconds || 0,
-        isValidated: r.is_validated || false,
-        status: (new Date().getTime() - new Date(r.last_ping_at || r.joined_at).getTime() < 120000) ? 'online' : 'offline'
-      }))
-    }
-  } catch (err) {
-    console.warn('Supabase live tracking fetch fallback:', err)
-  }
-
-  // Local fallback
-  const local = getLocalLiveTracking().filter(t => t.lessonId === lessonId)
-  return local.map(t => ({
-    ...t,
-    status: (new Date().getTime() - new Date(t.lastPingAt || t.joinedAt).getTime() < 120000) ? 'online' : 'offline'
-  }))
+  return apiRequest<EadLiveTracking[]>(`/api/ead/live?lessonId=${lessonId}`)
 }
 
 

@@ -1,5 +1,5 @@
 import { NextResponse } from "next/server"
-import { requireUser } from "@/lib/api-auth"
+import { requireUser, isOwnStudent } from "@/lib/api-auth"
 import { listAttendances, listStudentAttendances, saveAttendance } from "@/lib/repos/attendance"
 
 export async function GET(req: Request) {
@@ -8,8 +8,14 @@ export async function GET(req: Request) {
   const { searchParams } = new URL(req.url)
   const disciplineId = searchParams.get("disciplineId")
   const studentId = searchParams.get("studentId")
-  if (studentId) return NextResponse.json(await listStudentAttendances(studentId))
+  if (studentId) {
+    if (u.role === "student" && !(await isOwnStudent(u.user.id, studentId))) {
+      return NextResponse.json({ error: "Acesso negado." }, { status: 403 })
+    }
+    return NextResponse.json(await listStudentAttendances(studentId))
+  }
   if (!disciplineId) return NextResponse.json({ error: "Informe disciplineId ou studentId." }, { status: 400 })
+  if (u.role === "student") return NextResponse.json({ error: "Acesso negado." }, { status: 403 })
   return NextResponse.json(await listAttendances(disciplineId))
 }
 

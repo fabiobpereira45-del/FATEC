@@ -1,5 +1,5 @@
 import { NextResponse } from "next/server"
-import { requireUser } from "@/lib/api-auth"
+import { requireUser, isOwnStudent } from "@/lib/api-auth"
 import { listChatMessages, sendChatMessage } from "@/lib/repos/chat"
 
 export async function GET(req: Request) {
@@ -9,7 +9,7 @@ export async function GET(req: Request) {
   const disciplineId = searchParams.get("disciplineId")
   const studentId = searchParams.get("studentId")
   if (!disciplineId || !studentId) return NextResponse.json({ error: "Informe disciplineId e studentId." }, { status: 400 })
-  if (u.role === "student" && u.user.id !== studentId) {
+  if (u.role === "student" && !(await isOwnStudent(u.user.id, studentId))) {
     return NextResponse.json({ error: "Acesso negado." }, { status: 403 })
   }
   return NextResponse.json(await listChatMessages(disciplineId, studentId))
@@ -22,7 +22,7 @@ export async function POST(req: Request) {
   if (!body?.studentId || !body?.disciplineId || !body?.message) {
     return NextResponse.json({ error: "Dados da mensagem incompletos." }, { status: 400 })
   }
-  if (u.role === "student" && u.user.id !== body.studentId) {
+  if (u.role === "student" && !(await isOwnStudent(u.user.id, body.studentId))) {
     return NextResponse.json({ error: "Acesso negado." }, { status: 403 })
   }
   const isFromStudent = u.role === "student"
