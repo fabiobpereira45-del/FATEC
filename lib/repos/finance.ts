@@ -157,6 +157,21 @@ export async function deleteFinancialCharge(id: string) {
   await pool.query("delete from financial_charges where id = $1::uuid", [id])
 }
 
+// Quita o pró-labore de um professor como uma despesa já paga (sem aluno vinculado).
+export async function settleProLabore(data: {
+  professorId: string; disciplineId: string; classId: string; amount: number; description: string; date?: string
+}) {
+  const useDate = data.date || new Date().toISOString().split("T")[0]
+  const { rows } = await pool.query(
+    `insert into financial_charges
+       (type, description, amount, professor_id, discipline_id, class_id, status, due_date, payment_date, payment_method)
+     values ('expense', $1, $2, $3, $4::uuid, $5::uuid, 'paid', $6::date, $6::timestamptz, 'other')
+     returning id`,
+    [data.description, data.amount, data.professorId, data.disciplineId, data.classId, useDate]
+  )
+  return { id: rows[0].id }
+}
+
 // ── Despesas ─────────────────────────────────────────────────────────────────
 
 function toExpense(r: any) {

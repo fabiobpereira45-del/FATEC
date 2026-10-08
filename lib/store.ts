@@ -907,14 +907,13 @@ export async function saveChallengeSubmission(sub: Omit<ChallengeSubmission, "id
 }
 
 export async function getProLaboreCalculations() {
-  const supabase = createClient()
   const [professors, links, schedules, settings, charges, allClasses, allDisciplines] = await Promise.all([
     getProfessorAccounts(),
     getAllProfessorDisciplines(),
     getClassSchedules(),
     getFinancialSettings(),
     getFinancialCharges(), // This includes expenses
-    supabase.from('classes').select('id, name').then((r: any) => r.data || []),
+    getClasses(),
     getDisciplines() // Fetch full discipline objects
   ])
 
@@ -989,39 +988,7 @@ export async function settleProLabore(data: {
   description: string,
   date?: string
 }): Promise<{ id: string }> {
-  console.log("Settling Pro-labore:", data)
-  const supabase = createClient()
-  const useDate = data.date || new Date().toISOString().split('T')[0]
-  
-  const dbData = {
-    type: 'expense',
-    description: data.description,
-    amount: data.amount,
-    professor_id: data.professorId,
-    discipline_id: data.disciplineId,
-    class_id: data.classId,
-    status: 'paid',
-    due_date: useDate,
-    payment_date: useDate,
-    payment_method: 'other',
-    created_at: new Date().toISOString()
-  }
-  
-  const { data: insertedData, error } = await supabase
-    .from('financial_charges')
-    .insert(dbData)
-    .select('id')
-    .single()
-    
-  if (error) {
-    console.error("Error settling pro-labore (SQL Error):", error)
-    // Se o erro for de restrição NOT NULL em student_id, avisamos o usuário sobre o SQL
-    if (error.message.includes("student_id") && error.message.includes("not-null")) {
-      throw new Error("Erro de banco de dados: O campo student_id não permite valores nulos na tabela financial_charges. É necessário rodar o comando SQL de ajuste no Supabase.")
-    }
-    throw new Error(error.message)
-  }
-  return insertedData
+  return apiRequest<{ id: string }>('/api/finance/pro-labore', 'POST', data)
 }
 
 
