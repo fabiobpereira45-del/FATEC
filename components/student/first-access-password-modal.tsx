@@ -5,7 +5,7 @@ import { KeyRound, Eye, EyeOff, ShieldCheck, Check, ArrowRight, X, Sparkles, Loa
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
-import { createClient } from "@/lib/supabase/client"
+import { apiRequest } from "@/lib/api-client"
 import type { StudentProfile } from "@/lib/store"
 
 interface FirstAccessPasswordModalProps {
@@ -27,7 +27,6 @@ export function FirstAccessPasswordModal({
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState("")
   const [success, setSuccess] = useState(false)
-  const supabase = createClient()
 
   if (!isOpen) return null
 
@@ -50,8 +49,8 @@ export function FirstAccessPasswordModal({
     e.preventDefault()
     setError("")
 
-    if (!newPassword || newPassword.length < 6) {
-      setError("A nova senha deve ter no mínimo 6 caracteres.")
+    if (!newPassword || newPassword.length < 8) {
+      setError("A nova senha deve ter no mínimo 8 caracteres.")
       return
     }
 
@@ -62,25 +61,7 @@ export function FirstAccessPasswordModal({
 
     setLoading(true)
     try {
-      // 1. Update Supabase Auth Password
-      const { error: authError } = await supabase.auth.updateUser({
-        password: newPassword,
-        data: {
-          password_changed: true,
-          password_changed_at: new Date().toISOString()
-        }
-      })
-      if (authError) throw authError
-
-      // 2. Mark in students table if column exists or in metadata
-      try {
-        await supabase.from('students').update({
-          bio: profile.bio || undefined
-        }).eq('id', profile.id)
-      } catch {
-        /* silent */
-      }
-
+      await apiRequest('/api/auth/change-password', 'POST', { newPassword })
       markDismissed()
       setSuccess(true)
       if (onPasswordChanged) onPasswordChanged()
@@ -160,7 +141,7 @@ export function FirstAccessPasswordModal({
                       type={showPassword ? "text" : "password"}
                       value={newPassword}
                       onChange={(e) => setNewPassword(e.target.value)}
-                      placeholder="Mínimo de 6 caracteres"
+                      placeholder="Mínimo de 8 caracteres"
                       className="pr-10 h-11 text-sm bg-background border-border/80"
                       disabled={loading}
                     />

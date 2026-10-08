@@ -48,6 +48,13 @@ export async function listSubmissionsByAssessment(assessmentId: string) {
   return rows.map(toSubmission)
 }
 
+export async function listSubmissionsByStudent(studentId: string) {
+  const { rows } = await pool.query(
+    "select * from student_submissions where student_id = $1::uuid", [studentId]
+  )
+  return rows.map(toSubmission)
+}
+
 export async function getSubmissionByEmail(email: string, assessmentId: string) {
   const { rows } = await pool.query(
     "select * from student_submissions where assessment_id = $1::uuid and student_email = $2",

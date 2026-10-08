@@ -5,7 +5,6 @@ import { Mail, User, ArrowRight, BookOpenCheck, AlertCircle, KeyRound, CheckCirc
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
-import { createClient } from "@/lib/supabase/client"
 import {
   getActiveAssessment,
   hasStudentSubmitted,
@@ -46,8 +45,6 @@ export function StudentLogin({ onLogin, onResult, onBack, preloadedAssessmentId 
   const [questions, setQuestions] = useState<Question[]>([])
   const [disc, setDisc] = useState<Discipline | null>(null)
   const [isInitializing, setIsInitializing] = useState(true)
-
-  const supabase = createClient()
 
   useEffect(() => {
     let mounted = true

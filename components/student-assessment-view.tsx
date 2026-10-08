@@ -16,7 +16,7 @@ import {
     type StudentGrade,
     type GradeSettings,
 } from "@/lib/store"
-import { createClient } from "@/lib/supabase/client"
+import { apiRequest } from "@/lib/api-client"
 import { Button } from "@/components/ui/button"
 import { BookOpenCheck, CheckCircle2, ArrowRight, Loader2, CalendarDays, Lock, FileText, ShieldAlert } from "lucide-react"
 
@@ -41,8 +41,6 @@ export function StudentAssessmentView({ studentId, studentName, studentEmail, st
     const [selectedAssessment, setSelectedAssessment] = useState<Assessment | null>(null)
     const [selectedSubmission, setSelectedSubmission] = useState<StudentSubmission | null>(null)
 
-    const supabase = createClient()
-
     useEffect(() => {
         async function loadData() {
             setLoading(true)
@@ -55,25 +53,9 @@ export function StudentAssessmentView({ studentId, studentName, studentEmail, st
                 ])
 
                 // Fetch submissions for this student's ID (Strict Isolation)
-                const { data: subsData } = await supabase
-                    .from('student_submissions')
-                    .select('*')
-                    .eq('student_id', studentId)
-
-                const subs: StudentSubmission[] = (subsData || []).map((row: any) => ({
-                    id: row.id,
-                    assessmentId: row.assessment_id,
-                    studentId: row.student_id,
-                    studentName: row.student_name,
-                    studentEmail: row.student_email,
-                    answers: typeof row.answers === 'string' ? JSON.parse(row.answers) : row.answers,
-                    score: row.score,
-                    totalPoints: row.total_points,
-                    percentage: row.percentage,
-                    timeElapsedSeconds: row.time_elapsed_seconds,
-                    submittedAt: row.submitted_at,
-                    createdAt: row.created_at,
-                }))
+                const subs: StudentSubmission[] = studentId
+                    ? await apiRequest<StudentSubmission[]>(`/api/submissions?studentId=${studentId}`)
+                    : []
 
                 // Filter official grades for this student
                 const myGrades = allGrades.filter(g => {
@@ -98,7 +80,7 @@ export function StudentAssessmentView({ studentId, studentName, studentEmail, st
             }
         }
         loadData()
-    }, [studentId, studentEmail, supabase])
+    }, [studentId, studentEmail])
 
     /**
      * Computes a student's average for a given discipline.

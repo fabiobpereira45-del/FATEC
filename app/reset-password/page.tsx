@@ -1,9 +1,9 @@
 "use client"
 
-import { useState, useEffect, Suspense } from "react"
+import { useState, Suspense } from "react"
 import { useSearchParams, useRouter } from "next/navigation"
 import { Eye, EyeOff, Lock, CheckCircle2, AlertCircle } from "lucide-react"
-import { createClient } from "@/lib/supabase/client"
+import { apiRequest } from "@/lib/api-client"
 
 function ResetPasswordContent() {
     const searchParams = useSearchParams()
@@ -14,27 +14,16 @@ function ResetPasswordContent() {
     const [loading, setLoading] = useState(false)
     const [success, setSuccess] = useState(false)
     const [error, setError] = useState("")
-    const supabase = createClient()
 
-    useEffect(() => {
-        // Supabase adds the token to the URL hash, exchange it for a session
-        const { data: listener } = supabase.auth.onAuthStateChange(async (event: any) => {
-            if (event === "PASSWORD_RECOVERY") {
-                // Session established by Supabase after clicking the email link
-            }
-        })
-        return () => listener.subscription.unsubscribe()
-    }, [supabase.auth])
-
+    // Requer uma sessão ativa (não há mais fluxo de link por e-mail).
     async function handleSubmit(e: React.FormEvent) {
         e.preventDefault()
         setError("")
-        if (password.length < 6) { setError("A senha deve ter no mínimo 6 caracteres."); return }
+        if (password.length < 8) { setError("A senha deve ter no mínimo 8 caracteres."); return }
         if (password !== confirm) { setError("As senhas não coincidem."); return }
         setLoading(true)
         try {
-            const { error: err } = await supabase.auth.updateUser({ password })
-            if (err) throw err
+            await apiRequest('/api/auth/change-password', 'POST', { newPassword: password })
             setSuccess(true)
             setTimeout(() => router.push("/"), 3000)
         } catch (err: any) {

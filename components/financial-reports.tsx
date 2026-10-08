@@ -13,13 +13,12 @@ import {
 } from "@/components/ui/select"
 import {
     type FinancialCharge, type StudentProfile, type Expense,
-    getFinancialCharges, getStudents, getExpenses, getProLaboreCalculations,
+    getFinancialCharges, getStudents, getExpenses, getProLaboreCalculations, getClasses,
 } from "@/lib/store"
 import {
     printFinancialReportPDF,
     openAndPrintHTML,
 } from "@/lib/pdf"
-import { createClient } from "@/lib/supabase/client"
 
 // ─── Helpers ────────────────────────────────────────────────────────────────
 
@@ -138,19 +137,18 @@ export function FinancialReports() {
     async function load() {
         setLoading(true)
         try {
-            const supabase = createClient()
-            const [ch, st, ex, pl, clResult] = await Promise.all([
+            const [ch, st, ex, pl, cl] = await Promise.all([
                 getFinancialCharges(),
                 getStudents(),
                 getExpenses(),
                 getProLaboreCalculations(),
-                supabase.from('classes').select('*').order('name')
+                getClasses()
             ])
             setCharges(ch)
             setStudents(st)
             setExpenses(ex)
             setProLabore(pl)
-            setClasses(clResult.data || [])
+            setClasses(cl || [])
         } catch (e) {
             console.error("Erro ao carregar dados:", e)
         } finally {

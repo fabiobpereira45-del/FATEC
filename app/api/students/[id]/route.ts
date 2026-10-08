@@ -25,7 +25,7 @@ export async function PATCH(req: Request, { params }: Ctx) {
   if (u.role === "student") {
     const student = await getStudent(id)
     if (student?.auth_user_id !== u.user.id) return NextResponse.json({ error: "Acesso negado." }, { status: 403 })
-    const allowed = ["avatar_url", "bio"]
+    const allowed = ["avatar_url", "bio", "name"]
     const extra = Object.keys(body).filter(k => !allowed.includes(k))
     if (extra.length > 0) return NextResponse.json({ error: "Aluno só pode alterar avatar e bio." }, { status: 403 })
   }

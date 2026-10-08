@@ -14,7 +14,6 @@ import {
 } from "@/lib/store"
 import { StudentAuth } from "@/components/student-auth"
 import { AvatarUpload } from "@/components/avatar-upload"
-import { createClient } from "@/lib/supabase/client"
 import { Sheet, SheetContent, SheetTrigger, SheetHeader, SheetTitle } from "@/components/ui/sheet"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
 import { ScrollArea } from "@/components/ui/scroll-area"
@@ -66,8 +65,6 @@ export function StudentDashboard({ session, onBack, onLogout }: Props) {
     const [tab, setTab] = useState<Tab>("overview")
     const [isMobileMenuOpen, setIsMobileMenuOpen] = useState(false)
     const [showFirstAccessModal, setShowFirstAccessModal] = useState(false)
-    const supabase = createClient()
-
     const [semesters, setSemesters] = useState<Semester[]>([])
     const [disciplines, setDisciplines] = useState<Discipline[]>([])
     const [curriculumSemesters, setCurriculumSemesters] = useState<Semester[]>([])

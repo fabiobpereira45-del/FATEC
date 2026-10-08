@@ -1,12 +1,21 @@
 import { NextResponse } from "next/server"
-import { requireUser } from "@/lib/api-auth"
-import { listSubmissions, listSubmissionsByAssessment, createSubmission } from "@/lib/repos/submissions"
+import { requireUser, isOwnStudent } from "@/lib/api-auth"
+import { listSubmissions, listSubmissionsByAssessment, listSubmissionsByStudent, createSubmission } from "@/lib/repos/submissions"
 
 export async function GET(req: Request) {
   const u = await requireUser(req)
   if ("error" in u) return u.error
   const { searchParams } = new URL(req.url)
   const assessmentId = searchParams.get("assessmentId")
+  const studentId = searchParams.get("studentId")
+
+  if (studentId) {
+    if (u.role === "student" && !(await isOwnStudent(u.user.id, studentId))) {
+      return NextResponse.json({ error: "Acesso negado." }, { status: 403 })
+    }
+    return NextResponse.json(await listSubmissionsByStudent(studentId))
+  }
+  if (u.role === "student") return NextResponse.json({ error: "Acesso negado." }, { status: 403 })
   return NextResponse.json(assessmentId ? await listSubmissionsByAssessment(assessmentId) : await listSubmissions())
 }
 

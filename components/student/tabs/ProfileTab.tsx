@@ -4,7 +4,7 @@ import { useState } from "react"
 import { Eye, EyeOff, Loader2, Save } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import { AvatarUpload } from "@/components/avatar-upload"
-import { createClient } from "@/lib/supabase/client"
+import { apiRequest } from "@/lib/api-client"
 import type { StudentProfile } from "@/lib/store"
 
 interface ProfileTabProps {
@@ -21,33 +21,25 @@ export function ProfileTab({ profile, onUpdateSuccess }: ProfileTabProps) {
     const [pwdLoading, setPwdLoading] = useState(false)
     const [pwdMsg, setPwdMsg] = useState("")
     const [pwdErr, setPwdErr] = useState("")
-    const supabase = createClient()
 
     async function handleUpdateProfile(e: React.FormEvent) {
         e.preventDefault()
         setPwdErr("")
         setPwdMsg("")
-        
+
         if (!editName.trim()) { setPwdErr("O nome não pode ficar vazio."); return }
-        if (newPassword && newPassword.length < 6) { setPwdErr("A nova senha deve ter no mínimo 6 caracteres."); return }
+        if (newPassword && newPassword.length < 8) { setPwdErr("A nova senha deve ter no mínimo 8 caracteres."); return }
         if (newPassword && newPassword !== confirmPassword) { setPwdErr("As senhas não coincidem."); return }
-        
+
         setPwdLoading(true)
         try {
-            // Update Auth (Name + Password)
-            const authUpdates: any = { data: { full_name: editName.trim() } }
-            if (newPassword) authUpdates.password = newPassword
-            
-            const { error: authError } = await supabase.auth.updateUser(authUpdates)
-            if (authError) throw authError
-
-            // Update Database Profile
-            const { error: dbError } = await supabase.from('students').update({
+            await apiRequest(`/api/students/${profile.id}`, 'PATCH', {
                 name: editName.trim(),
                 bio: editBio.trim()
-            }).eq('id', profile.id)
-            
-            if (dbError) throw dbError
+            })
+            if (newPassword) {
+                await apiRequest('/api/auth/change-password', 'POST', { newPassword })
+            }
 
             setPwdMsg("Perfil atualizado com sucesso!")
             setNewPassword("")
@@ -106,7 +98,7 @@ export function ProfileTab({ profile, onUpdateSuccess }: ProfileTabProps) {
                                     <input
                                         type={showPwd ? "text" : "password"}
                                         className="w-full border border-border rounded-2xl px-5 py-3 text-sm bg-slate-50"
-                                        placeholder="Min 6 caracteres"
+                                        placeholder="Min 8 caracteres"
                                         value={newPassword}
                                         onChange={e => setNewPassword(e.target.value)}
                                     />

@@ -95,10 +95,7 @@ export function StudyMaterialManager() {
     async function handleDelete() {
         if (!deleteId) return
         try {
-            // Optionally delete from storage as well, but for simplicity we only delete from DB here.
-            // E.g. const mat = materials.find(m => m.id === deleteId); 
-            // if (mat) { const path = mat.fileUrl.split('/materials/')[1]; supabase.storage.from('materials').remove([path]) }
-
+            // A API já remove o arquivo do Vercel Blob junto com o registro.
             await deleteStudyMaterial(deleteId)
             setDeleteId(null)
             load()

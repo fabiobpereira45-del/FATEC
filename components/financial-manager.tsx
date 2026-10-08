@@ -21,11 +21,11 @@ import {
     type FinancialCharge, type StudentProfile, type FinancialSettings, type Assessment,
     getFinancialCharges, addFinancialCharge, updateFinancialChargeStatus, deleteFinancialCharge, updateFinancialCharge,
     getFinancialSettings, updateFinancialSettings, getAssessments, triggerN8nWebhook,
-    syncStudentTuitionByDisciplines, settleFinancialCharge, reverseFinancialCharge
+    syncStudentTuitionByDisciplines, settleFinancialCharge, reverseFinancialCharge,
+    getStudents, getClasses, getDisciplines, getClassSchedules
 } from "@/lib/store"
 import { printFinancialReportPDF, printStudentFinancialReportPDF } from "@/lib/pdf"
 import { ScrollArea } from "@/components/ui/scroll-area"
-import { createClient } from "@/lib/supabase/client"
 
 export function FinancialManager({ onRefresh, month, year, scope, poloFilter }: { 
     onRefresh?: () => void,
@@ -91,6 +91,7 @@ export function FinancialManager({ onRefresh, month, year, scope, poloFilter }: 
     const [searchBolsa, setSearchBolsa] = useState("all")
     const [allClasses, setAllClasses] = useState<any[]>([])
     const [allDisciplines, setAllDisciplines] = useState<any[]>([])
+    const [allSchedules, setAllSchedules] = useState<any[]>([])
     const [disciplinesForClass, setDisciplinesForClass] = useState<any[]>([])
 
     // Calculate totals for selected class for the current period
@@ -126,28 +127,27 @@ export function FinancialManager({ onRefresh, month, year, scope, poloFilter }: 
     const [bulkDiscountAmount, setBulkDiscountAmount] = useState("")
     const [bulkDiscountLoading, setBulkDiscountLoading] = useState(false)
 
-    const supabase = createClient()
-
     async function fetchAllStudents() {
-        const { data } = await supabase.from('students').select('*').eq('status', 'active').order('name')
-        return data || []
+        const all = await getStudents()
+        return all.filter(s => s.status === 'active')
     }
 
     async function load() {
         setLoading(true)
-        const [c, s, config, { data: classesData }, disciplinesData, schedulesData] = await Promise.all([
+        const [c, s, config, classesData, disciplinesData, schedulesData] = await Promise.all([
             getFinancialCharges(undefined, poloFilter),
             fetchAllStudents(),
             getFinancialSettings(),
-            supabase.from('classes').select('*').order('name'),
-            supabase.from('disciplines').select('*'),
-            supabase.from('class_schedules').select('*')
+            getClasses(),
+            getDisciplines(),
+            getClassSchedules()
         ])
         setCharges(c)
         setStudents(s)
         setSettings(config)
         setAllClasses(classesData || [])
-        setAllDisciplines(disciplinesData.data || [])
+        setAllDisciplines(disciplinesData || [])
+        setAllSchedules(schedulesData || [])
         setLoading(false)
     }
 
@@ -159,24 +159,17 @@ export function FinancialManager({ onRefresh, month, year, scope, poloFilter }: 
             setDisciplinesForClass(allDisciplines)
         } else {
             // Get disciplines for the selected class via class_schedules
-            const fetchDisciplinesForClass = async () => {
-                const { data: schedules } = await supabase
-                    .from('class_schedules')
-                    .select('discipline_id')
-                    .eq('class_id', searchClass)
-                
-                if (schedules && schedules.length > 0) {
-                    const disciplineIds = [...new Set(schedules.map((s: any) => s.discipline_id))]
-                    const filtered = allDisciplines.filter(d => disciplineIds.includes(d.id))
-                    setDisciplinesForClass(filtered)
-                } else {
-                    setDisciplinesForClass([])
-                }
+            const schedules = allSchedules.filter((sch: any) => sch.classId === searchClass)
+            if (schedules.length > 0) {
+                const disciplineIds = [...new Set(schedules.map((sch: any) => sch.disciplineId))]
+                const filtered = allDisciplines.filter(d => disciplineIds.includes(d.id))
+                setDisciplinesForClass(filtered)
+            } else {
+                setDisciplinesForClass([])
             }
-            fetchDisciplinesForClass()
         }
         setSearchDiscipline("all")
-    }, [searchClass, allDisciplines])
+    }, [searchClass, allDisciplines, allSchedules])
 
     // Auto-fill amount based on type and settings
     useEffect(() => {
