@@ -1,60 +1,54 @@
-import { NextResponse } from 'next/server'
-import { createClient } from '@supabase/supabase-js'
-
-const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL!
-const supabaseServiceKey = process.env.SUPABASE_SERVICE_ROLE_KEY!
-const supabase = createClient(supabaseUrl, supabaseServiceKey)
+import { NextResponse } from "next/server"
+import { requireUser, isOwnStudent } from "@/lib/api-auth"
+import { listChallengeSubmissions, createChallengeSubmission, deleteChallengeSubmission, deleteChallengeSubmissionsByChallenge } from "@/lib/repos/challenges"
 
 export async function GET(request: Request) {
+  const u = await requireUser(request)
+  if ("error" in u) return u.error
   const { searchParams } = new URL(request.url)
-  const studentId = searchParams.get('studentId')
-  const challengeId = searchParams.get('challengeId')
-  
-  let query = supabase.from('challenge_submissions').select('*')
+  const studentId = searchParams.get("studentId")
+  const challengeId = searchParams.get("challengeId")
 
   if (studentId) {
-    query = query.eq('student_id', studentId)
-  } else if (challengeId) {
-    query = query.eq('challenge_id', challengeId)
-  } else {
-    return NextResponse.json({ error: 'Missing filter' }, { status: 400 })
+    if (u.role === "student" && !(await isOwnStudent(u.user.id, studentId))) {
+      return NextResponse.json({ error: "Acesso negado." }, { status: 403 })
+    }
+    return NextResponse.json(await listChallengeSubmissions({ studentId }))
   }
-
-  const { data, error } = await query
-
-  if (error) return NextResponse.json({ error: error.message }, { status: 500 })
-  return NextResponse.json(data)
+  if (challengeId) {
+    if (u.role === "student") return NextResponse.json({ error: "Acesso negado." }, { status: 403 })
+    return NextResponse.json(await listChallengeSubmissions({ challengeId }))
+  }
+  return NextResponse.json({ error: "Missing filter" }, { status: 400 })
 }
 
 export async function POST(request: Request) {
-  try {
-    const body = await request.json()
-    
-    const { error } = await supabase
-      .from('challenge_submissions')
-      .insert(body)
-
-    if (error) return NextResponse.json({ error: error.message }, { status: 500 })
-    return NextResponse.json({ success: true })
-  } catch (error: any) {
-    return NextResponse.json({ error: error.message }, { status: 500 })
+  const u = await requireUser(request)
+  if ("error" in u) return u.error
+  const body = await request.json().catch(() => null)
+  if (!body?.challenge_id || !body?.student_id) {
+    return NextResponse.json({ error: "Dados incompletos." }, { status: 400 })
   }
+  if (u.role === "student" && !(await isOwnStudent(u.user.id, body.student_id))) {
+    return NextResponse.json({ error: "Acesso negado." }, { status: 403 })
+  }
+  await createChallengeSubmission(body)
+  return NextResponse.json({ success: true })
 }
 
 export async function DELETE(request: Request) {
+  const u = await requireUser(request, ["master", "professor", "secretary"])
+  if ("error" in u) return u.error
   const { searchParams } = new URL(request.url)
-  const id = searchParams.get('id')
-  const challengeId = searchParams.get('challengeId')
+  const id = searchParams.get("id")
+  const challengeId = searchParams.get("challengeId")
 
   if (id) {
-    const { error } = await supabase.from('challenge_submissions').delete().eq('id', id)
-    if (error) return NextResponse.json({ error: error.message }, { status: 500 })
+    await deleteChallengeSubmission(id)
   } else if (challengeId) {
-    const { error } = await supabase.from('challenge_submissions').delete().eq('challenge_id', challengeId)
-    if (error) return NextResponse.json({ error: error.message }, { status: 500 })
+    await deleteChallengeSubmissionsByChallenge(challengeId)
   } else {
-    return NextResponse.json({ error: 'Missing id or challengeId' }, { status: 400 })
+    return NextResponse.json({ error: "Missing id or challengeId" }, { status: 400 })
   }
-
   return NextResponse.json({ success: true })
 }
